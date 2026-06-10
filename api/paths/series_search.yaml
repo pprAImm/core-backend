@@ -12,14 +12,12 @@ get:
       example: ninja
   responses:
     "200":
-      description: Список найденных сериалов
+      description: Список найденных сериалов. Если ничего не найдено — пустой массив [].
       content:
         application/json:
           schema:
             type: array
             items:
               $ref: ../components/schemas/Series.yaml
-    200 (пусто):
-      description: Если ничего не найдено — пустой список []
   tags:
     - Сериалы

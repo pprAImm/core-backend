@@ -1,0 +1,25 @@
+node_modules/
+api/openapi.bundled.yaml
+api/openapi-split/
+api/.split-tmp/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Env
+.env
+.env.*
