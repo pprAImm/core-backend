@@ -2,7 +2,8 @@
   "name": "core-backend",
   "private": true,
   "scripts": {
-    "openapi:split": "mkdir -p api/openapi-split && openapi-format ./api/openapi.yaml -o ./api/openapi-split/openapi.yaml --split"
+    "openapi:bundle": "openapi-format api/openapi.yaml -o api/openapi.bundled.yaml --no-sort",
+    "openapi:split": "mkdir -p api/.split-tmp && openapi-format api/openapi.bundled.yaml -o api/.split-tmp/openapi.yaml --split"
   },
   "devDependencies": {
     "openapi-format": "^1.33.0"
