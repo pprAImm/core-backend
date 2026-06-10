@@ -1,0 +1,40 @@
+post:
+  operationId: register
+  summary: Регистрация нового пользователя
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            username:
+              type: string
+              example: arina
+            email:
+              type: string
+              format: email
+              example: arina@example.com
+            password:
+              type: string
+              format: password
+              example: mypassword123
+          required:
+            - username
+            - email
+            - password
+  responses:
+    "201":
+      description: Пользователь создан
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/User.yaml
+    "409":
+      description: Пользователь с таким email уже существует
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Error.yaml
+  tags:
+    - Авторизация

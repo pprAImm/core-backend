@@ -1,0 +1,16 @@
+type: object
+properties:
+  id:
+    type: integer
+    example: 1
+  name:
+    type: string
+    example: Аниме
+  slug:
+    description: Идентификатор для URL, например /category/anime
+    type: string
+    example: anime
+required:
+  - id
+  - name
+  - slug

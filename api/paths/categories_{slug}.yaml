@@ -1,0 +1,24 @@
+get:
+  operationId: getCategoryBySlug
+  summary: Получить категорию по slug
+  description: Возвращает информацию о категории и список её сериалов
+  parameters:
+    - $ref: ../components/parameters/CategorySlug.yaml
+  responses:
+    "200":
+      description: Категория со списком сериалов
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              category:
+                $ref: ../components/schemas/Category.yaml
+              series:
+                type: array
+                items:
+                  $ref: ../components/schemas/Series.yaml
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  tags:
+    - Категории

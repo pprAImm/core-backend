@@ -1,0 +1,12 @@
+type: object
+properties:
+  series_id:
+    type: integer
+    example: 1
+  average:
+    type: number
+    format: float
+    example: 8.3
+required:
+  - series_id
+  - average

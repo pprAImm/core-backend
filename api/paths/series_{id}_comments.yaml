@@ -1,0 +1,64 @@
+get:
+  operationId: getSeriesComments
+  summary: Получить комментарии к сериалу
+  description: Возвращает все комментарии, отсортированные от новых к старым
+  parameters:
+    - $ref: ../components/parameters/SeriesId.yaml
+  responses:
+    "200":
+      description: Список комментариев
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: ../components/schemas/Comment.yaml
+          example:
+            - id: 1
+              username: arina
+              body: Отличный сериал!
+              created_at: 2024-01-15T10:30:00Z
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  tags:
+    - Комментарии
+post:
+  operationId: addComment
+  summary: Добавить комментарий к сериалу
+  description: Создаёт новый комментарий. Требует авторизации.
+  parameters:
+    - $ref: ../components/parameters/SeriesId.yaml
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            body:
+              type: string
+              example: Отличный сериал!
+              minLength: 1
+          required:
+            - body
+  responses:
+    "201":
+      description: Комментарий добавлен
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Comment.yaml
+    "400":
+      description: Пустой комментарий
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Error.yaml
+    "401":
+      $ref: ../components/responses/Unauthorized.yaml
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  security:
+    - cookieAuth: []
+  tags:
+    - Комментарии

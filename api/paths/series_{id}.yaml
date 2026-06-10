@@ -1,0 +1,24 @@
+get:
+  operationId: getSeriesById
+  summary: Получить сериал по ID
+  description: Возвращает информацию о сериале и список его эпизодов
+  parameters:
+    - $ref: ../components/parameters/SeriesId.yaml
+  responses:
+    "200":
+      description: Сериал с эпизодами
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              series:
+                $ref: ../components/schemas/Series.yaml
+              episodes:
+                type: array
+                items:
+                  $ref: ../components/schemas/Episode.yaml
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  tags:
+    - Сериалы

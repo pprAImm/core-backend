@@ -1,0 +1,22 @@
+get:
+  operationId: getAllCategories
+  summary: Получить все категории
+  description: Возвращает список всех категорий для главной страницы
+  responses:
+    "200":
+      description: Список категорий
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: ../components/schemas/Category.yaml
+          example:
+            - id: 1
+              name: Аниме
+              slug: anime
+            - id: 2
+              name: Документальное
+              slug: docs
+  tags:
+    - Категории

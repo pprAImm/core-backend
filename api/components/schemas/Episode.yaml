@@ -1,0 +1,23 @@
+type: object
+properties:
+  id:
+    type: integer
+    example: 1
+  series_id:
+    type: integer
+    example: 1
+  title:
+    type: string
+    example: Пробуждение
+    nullable: true
+  tiktok_url:
+    type: string
+    example: https://www.tiktok.com/@example/video/1
+  episode_num:
+    type: integer
+    example: 1
+    nullable: true
+required:
+  - id
+  - series_id
+  - tiktok_url

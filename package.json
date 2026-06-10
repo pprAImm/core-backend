@@ -1,0 +1,10 @@
+{
+  "name": "core-backend",
+  "private": true,
+  "scripts": {
+    "openapi:split": "mkdir -p api/openapi-split && openapi-format ./api/openapi.yaml -o ./api/openapi-split/openapi.yaml --split"
+  },
+  "devDependencies": {
+    "openapi-format": "^1.33.0"
+  }
+}
