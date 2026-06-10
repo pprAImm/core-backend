@@ -1,0 +1,13 @@
+post:
+  operationId: logout
+  summary: Выход из системы
+  description: Удаляет сессию из БД и очищает куку в браузере
+  responses:
+    "200":
+      description: Успешный выход
+    "401":
+      $ref: ../components/responses/Unauthorized.yaml
+  security:
+    - cookieAuth: []
+  tags:
+    - Авторизация

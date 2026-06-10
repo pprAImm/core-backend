@@ -1,0 +1,45 @@
+post:
+  operationId: login
+  summary: Вход в систему
+  description: |
+    Проверяет email и пароль.
+    При успехе устанавливает куку session_id в браузере.
+    Эта кука автоматически отправляется со всеми последующими запросами.
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            email:
+              type: string
+              format: email
+              example: arina@example.com
+            password:
+              type: string
+              format: password
+              example: mypassword123
+          required:
+            - email
+            - password
+  responses:
+    "200":
+      description: Успешный вход. Кука session_id установлена.
+      headers:
+        Set-Cookie:
+          schema:
+            type: string
+            example: session_id=abc123xyz; HttpOnly; Path=/
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/User.yaml
+    "401":
+      description: Неверный email или пароль
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Error.yaml
+  tags:
+    - Авторизация

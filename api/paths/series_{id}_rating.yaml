@@ -1,0 +1,65 @@
+get:
+  operationId: getSeriesRating
+  summary: Получить средний рейтинг сериала
+  description: Возвращает среднюю оценку по всем пользователям
+  parameters:
+    - $ref: ../components/parameters/SeriesId.yaml
+  responses:
+    "200":
+      description: Средний рейтинг
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Rating.yaml
+          example:
+            series_id: 1
+            average: 8.3
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  tags:
+    - Рейтинг
+post:
+  operationId: rateSeries
+  summary: Поставить оценку сериалу
+  description: |
+    Ставит оценку от 1 до 10.
+    Один пользователь — одна оценка на сериал.
+    Повторный запрос обновит существующую оценку.
+    Требует авторизации.
+  parameters:
+    - $ref: ../components/parameters/SeriesId.yaml
+  requestBody:
+    required: true
+    content:
+      application/json:
+        schema:
+          type: object
+          properties:
+            score:
+              type: integer
+              example: 9
+              maximum: 10
+              minimum: 1
+          required:
+            - score
+  responses:
+    "200":
+      description: Оценка сохранена
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Rating.yaml
+    "400":
+      description: Оценка должна быть от 1 до 10
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Error.yaml
+    "401":
+      $ref: ../components/responses/Unauthorized.yaml
+    "404":
+      $ref: ../components/responses/NotFound.yaml
+  security:
+    - cookieAuth: []
+  tags:
+    - Рейтинг

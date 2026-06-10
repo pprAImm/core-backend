@@ -1,0 +1,28 @@
+type: object
+properties:
+  id:
+    type: integer
+    example: 1
+  title:
+    type: string
+    example: AI Ninja Chronicles
+  description:
+    type: string
+    example: Боевое аниме созданное нейросетью
+    nullable: true
+  category_id:
+    type: integer
+    example: 1
+  cover_url:
+    type: string
+    example: https://picsum.photos/300/400?random=1
+    nullable: true
+  average_rating:
+    description: Средняя оценка всех пользователей (1-10), null если оценок нет
+    type: number
+    format: float
+    example: 8.3
+    nullable: true
+required:
+  - id
+  - title

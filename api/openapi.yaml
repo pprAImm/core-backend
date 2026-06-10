@@ -1,545 +1,73 @@
-openapi: "3.0.0"
+openapi: 3.0.0
 info:
-  title: "pprAImm — Платформа AI-сериалов"
-  version: "1.0.0"
+  title: pprAImm — Платформа AI-сериалов
+  version: 1.0.0
   description: |
     Каталог AI-видеосериалов из TikTok.
     Позволяет просматривать категории, сериалы и эпизоды,
     оставлять оценки и комментарии.
     Требует авторизации для оценок и комментариев.
 servers:
-  - url: "http://localhost:8080"
-    description: "Локальный сервер разработки"
-tags:
-  - name: "Категории"
-    description: "Просмотр категорий сериалов"
-  - name: "Сериалы"
-    description: "Просмотр и поиск сериалов"
-  - name: "Эпизоды"
-    description: "Просмотр эпизодов сериала"
-  - name: "Авторизация"
-    description: "Регистрация, вход и выход"
-  - name: "Рейтинг"
-    description: "Оценки сериалов от пользователей"
-  - name: "Комментарии"
-    description: "Комментарии к сериалам"
+  - url: http://localhost:8080
+    description: Локальный сервер разработки
+paths:
+  /categories:
+    $ref: paths/categories.yaml
+  /categories/{slug}:
+    $ref: paths/categories_{slug}.yaml
+  /series/{id}:
+    $ref: paths/series_{id}.yaml
+  /series/search:
+    $ref: paths/series_search.yaml
+  /auth/register:
+    $ref: paths/auth_register.yaml
+  /auth/login:
+    $ref: paths/auth_login.yaml
+  /auth/logout:
+    $ref: paths/auth_logout.yaml
+  /series/{id}/rating:
+    $ref: paths/series_{id}_rating.yaml
+  /series/{id}/comments:
+    $ref: paths/series_{id}_comments.yaml
 components:
-  # ---------- СХЕМЫ (структуры данных) ----------
+  parameters:
+    CategorySlug:
+      $ref: components/parameters/CategorySlug.yaml
+    SeriesId:
+      $ref: components/parameters/SeriesId.yaml
   schemas:
     Category:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        name:
-          type: string
-          example: "Аниме"
-        slug:
-          type: string
-          example: "anime"
-          description: "Идентификатор для URL, например /category/anime"
-      required:
-        - id
-        - name
-        - slug
-
+      $ref: components/schemas/Category.yaml
     Series:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        title:
-          type: string
-          example: "AI Ninja Chronicles"
-        description:
-          type: string
-          nullable: true
-          example: "Боевое аниме созданное нейросетью"
-        category_id:
-          type: integer
-          example: 1
-        cover_url:
-          type: string
-          nullable: true
-          example: "https://picsum.photos/300/400?random=1"
-        average_rating:
-          type: number
-          format: float
-          nullable: true
-          description: "Средняя оценка всех пользователей (1-10), null если оценок нет"
-          example: 8.3
-      required:
-        - id
-        - title
-
+      $ref: components/schemas/Series.yaml
     Episode:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        series_id:
-          type: integer
-          example: 1
-        title:
-          type: string
-          nullable: true
-          example: "Пробуждение"
-        tiktok_url:
-          type: string
-          example: "https://www.tiktok.com/@example/video/1"
-        episode_num:
-          type: integer
-          nullable: true
-          example: 1
-      required:
-        - id
-        - series_id
-        - tiktok_url
-
+      $ref: components/schemas/Episode.yaml
     User:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        username:
-          type: string
-          example: "arina"
-        email:
-          type: string
-          format: email
-          example: "arina@example.com"
-      required:
-        - id
-        - username
-        - email
-
+      $ref: components/schemas/User.yaml
     Comment:
-      type: object
-      properties:
-        id:
-          type: integer
-          example: 1
-        username:
-          type: string
-          example: "arina"
-          description: "Имя пользователя который оставил комментарий"
-        body:
-          type: string
-          example: "Отличный сериал!"
-        created_at:
-          type: string
-          format: date-time
-          example: "2024-01-15T10:30:00Z"
-      required:
-        - id
-        - username
-        - body
-        - created_at
-
+      $ref: components/schemas/Comment.yaml
     Error:
-      type: object
-      properties:
-        error:
-          type: string
-          example: "Сериал не найден"
-      required:
-        - error
-
-    # ---------- ПАРАМЕТРЫ ----------
-  parameters:
-    SeriesId:
-      name: id
-      in: path
-      required: true
-      schema:
-        type: integer
-      description: "ID сериала"
-
-    CategorySlug:
-      name: slug
-      in: path
-      required: true
-      schema:
-        type: string
-      description: "Slug категории, например anime"
-
- # ---------- ОТВЕТЫ (переиспользуемые ответы) ----------
+      $ref: components/schemas/Error.yaml
+    Rating:
+      $ref: components/schemas/Rating.yaml
   responses:
     Unauthorized:
-      description: "Пользователь не авторизован"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-            
+      $ref: components/responses/Unauthorized.yaml
     NotFound:
-      description: "Ресурс не найден"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
-  # ---------- СХЕМЫ БЕЗОПАСНОСТИ ----------
+      $ref: components/responses/NotFound.yaml
   securitySchemes:
     cookieAuth:
-      type: apiKey
-      in: cookie
-      name: session_id
-      
-  paths:
-
-  # ==================== КАТЕГОРИИ ====================
-  /categories:
-    get:
-      tags:
-        - "Категории"
-      summary: "Получить все категории"
-      description: "Возвращает список всех категорий для главной страницы"
-      operationId: "getAllCategories"
-      responses:
-        "200":
-          description: "Список категорий"
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Category"
-              example:
-                - id: 1
-                  name: "Аниме"
-                  slug: "anime"
-                - id: 2
-                  name: "Документальное"
-                  slug: "docs"
-
-  /categories/{slug}:
-    get:
-      tags:
-        - "Категории"
-      summary: "Получить категорию по slug"
-      description: "Возвращает информацию о категории и список её сериалов"
-      operationId: "getCategoryBySlug"
-      parameters:
-        - $ref: "#/components/parameters/CategorySlug"
-      responses:
-        "200":
-          description: "Категория со списком сериалов"
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  category:
-                    $ref: "#/components/schemas/Category"
-                  series:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Series"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  # ==================== СЕРИАЛЫ ====================
-  /series/{id}:
-    get:
-      tags:
-        - "Сериалы"
-      summary: "Получить сериал по ID"
-      description: "Возвращает информацию о сериале и список его эпизодов"
-      operationId: "getSeriesById"
-      parameters:
-        - $ref: "#/components/parameters/SeriesId"
-      responses:
-        "200":
-          description: "Сериал с эпизодами"
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  series:
-                    $ref: "#/components/schemas/Series"
-                  episodes:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Episode"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /series/search:
-    get:
-      tags:
-        - "Сериалы"
-      summary: "Поиск сериалов по названию"
-      description: "Ищет сериалы по подстроке в названии (ILIKE)"
-      operationId: "searchSeries"
-      parameters:
-        - name: q
-          in: query
-          required: true
-          schema:
-            type: string
-          description: "Поисковый запрос"
-          example: "ninja"
-      responses:
-        "200":
-          description: "Список найденных сериалов"
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Series"
-        "200 (пусто)":
-          description: "Если ничего не найдено — пустой список []"
-
-  # ==================== АВТОРИЗАЦИЯ ====================
-
-  /auth/register:
-    post:
-      tags:
-        - "Авторизация"
-      summary: "Регистрация нового пользователя"
-      operationId: "register"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                username:
-                  type: string
-                  example: "arina"
-                email:
-                  type: string
-                  format: email
-                  example: "arina@example.com"
-                password:
-                  type: string
-                  format: password
-                  example: "mypassword123"
-              required:
-                - username
-                - email
-                - password
-      responses:
-        "201":
-          description: "Пользователь создан"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "409":
-          description: "Пользователь с таким email уже существует"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /auth/login:
-    post:
-      tags:
-        - "Авторизация"
-      summary: "Вход в систему"
-      description: |
-        Проверяет email и пароль.
-        При успехе устанавливает куку session_id в браузере.
-        Эта кука автоматически отправляется со всеми последующими запросами.
-      operationId: "login"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  format: email
-                  example: "arina@example.com"
-                password:
-                  type: string
-                  format: password
-                  example: "mypassword123"
-              required:
-                - email
-                - password
-      responses:
-        "200":
-          description: "Успешный вход. Кука session_id установлена."
-          headers:
-            Set-Cookie:
-              schema:
-                type: string
-                example: "session_id=abc123xyz; HttpOnly; Path=/"
-                # ^ HttpOnly — кука недоступна из JavaScript (защита от XSS атак).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/User"
-        "401":
-          description: "Неверный email или пароль"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-
-  /auth/logout:
-    post:
-      tags:
-        - "Авторизация"
-      summary: "Выход из системы"
-      description: "Удаляет сессию из БД и очищает куку в браузере"
-      operationId: "logout"
-      security:
-        # Ссылается на cookieAuth из securitySchemes выше.
-        - cookieAuth: []
-          # Актуально для OAuth, для нашего случая просто пустой список.
-      responses:
-        "200":
-          description: "Успешный выход"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  # ==================== РЕЙТИНГ ====================
-  /series/{id}/rating:
-    get:
-      tags:
-        - "Рейтинг"
-      summary: "Получить средний рейтинг сериала"
-      description: "Возвращает среднюю оценку по всем пользователям"
-      operationId: "getSeriesRating"
-      parameters:
-        - $ref: "#/components/parameters/SeriesId"
-      responses:
-        "200":
-          description: "Средний рейтинг"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Rating"
-              example:
-                series_id: 1
-                average: 8.3
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-    post:
-      tags:
-        - "Рейтинг"
-      summary: "Поставить оценку сериалу"
-      description: |
-        Ставит оценку от 1 до 10.
-        Один пользователь — одна оценка на сериал.
-        Повторный запрос обновит существующую оценку.
-        Требует авторизации.
-      operationId: "rateSeries"
-      security:
-        - cookieAuth: []
-      parameters:
-        - $ref: "#/components/parameters/SeriesId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                score:
-                  type: integer
-                  minimum: 1
-                  maximum: 10
-                  example: 9
-              required:
-                - score
-      responses:
-        "200":
-          description: "Оценка сохранена"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Rating"
-        "400":
-          description: "Оценка должна быть от 1 до 10"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  # ==================== КОММЕНТАРИИ ====================
-
-  /series/{id}/comments:
-    get:
-      tags:
-        - "Комментарии"
-      summary: "Получить комментарии к сериалу"
-      description: "Возвращает все комментарии, отсортированные от новых к старым"
-      operationId: "getSeriesComments"
-      parameters:
-        - $ref: "#/components/parameters/SeriesId"
-      responses:
-        "200":
-          description: "Список комментариев"
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Comment"
-              example:
-                - id: 1
-                  username: "arina"
-                  body: "Отличный сериал!"
-                  created_at: "2024-01-15T10:30:00Z"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-    post:
-      tags:
-        - "Комментарии"
-      summary: "Добавить комментарий к сериалу"
-      description: "Создаёт новый комментарий. Требует авторизации."
-      operationId: "addComment"
-      security:
-        - cookieAuth: []
-      parameters:
-        - $ref: "#/components/parameters/SeriesId"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                body:
-                  type: string
-                  example: "Отличный сериал!"
-                  minLength: 1
-              required:
-                - body
-      responses:
-        "201":
-          description: "Комментарий добавлен"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Comment"
-        "400":
-          description: "Пустой комментарий"
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
+      $ref: components/securitySchemes/cookieAuth.yaml
+tags:
+  - name: Категории
+    description: Просмотр категорий сериалов
+  - name: Сериалы
+    description: Просмотр и поиск сериалов
+  - name: Эпизоды
+    description: Просмотр эпизодов сериала
+  - name: Авторизация
+    description: Регистрация, вход и выход
+  - name: Рейтинг
+    description: Оценки сериалов от пользователей
+  - name: Комментарии
+    description: Комментарии к сериалам

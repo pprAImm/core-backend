@@ -1,0 +1,16 @@
+type: object
+properties:
+  id:
+    type: integer
+    example: 1
+  username:
+    type: string
+    example: arina
+  email:
+    type: string
+    format: email
+    example: arina@example.com
+required:
+  - id
+  - username
+  - email
