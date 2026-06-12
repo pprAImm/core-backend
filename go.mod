@@ -6,7 +6,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/go-chi/cors v1.2.2
 	github.com/oapi-codegen/runtime v1.4.1
-	github.com/pprAImm/database v0.0.0-20260611104912-ac860d917101
+	github.com/pprAImm/database v0.0.0-20260612164825-c0b0bbb0fa10
 	golang.org/x/crypto v0.53.0
 )
 

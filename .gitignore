@@ -1,4 +1,7 @@
+# Node.js
 node_modules/
+
+# OpenAPI временные файлы
 api/openapi.bundled.yaml
 api/openapi-split/
 api/.split-tmp/
@@ -23,3 +26,31 @@ api/.split-tmp/
 # Env
 .env
 .env.*
+
+# Сессионные файлы
+cookies.txt
+*.cookie
+
+# Логи
+*.log
+logs/
+
+# Временные файлы
+*.tmp
+*.temp
+tmp/
+
+# Сгенерированные файлы (если нужно сохранить в репозитории - удалить эту строку)
+internal/api/api_gen.go
+
+# Покрытие кода
+coverage.out
+coverage.html
+
+# Отчёты профилирования
+*.prof
+*.pprof
+
+# Go workspace
+go.work
+go.work.sum
