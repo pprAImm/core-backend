@@ -9,7 +9,6 @@ import (
 	"github.com/go-chi/cors"
 
 	"github.com/pprAImm/core-backend/internal/api"
-
 	"github.com/pprAImm/database"
 	"github.com/pprAImm/database/store"
 )
@@ -17,36 +16,28 @@ import (
 func main() {
 	log.Println("Запуск сервера...")
 
-	// 1. Подключение к базе данных
-	// Инициализирует пул соединений с PostgreSQL
+	// Подключение к базе данных
 	pool, err := database.Init()
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
 	}
-	defer pool.Close() // Закрываем соединение при завершении
+	defer pool.Close()
 	log.Println("Подключение к БД установлено")
 
-	// 2. Создание слоя доступа к данным
-	// NewQueries - публичная фабрика из database/public.go
-	// Store - слой бизнес-логики для работы с БД
+	// Создание слоя доступа к данным
 	queries := database.NewQueries(pool)
 	storeInstance := store.NewStore(queries)
 
-	// 3. Создание HTTP сервера с реализацией хендлеров
-	// NewServer принимает Store, чтобы хендлеры могли работать с БД
+	// Создание сервера с реализацией хендлеров
 	server := api.NewServer(storeInstance)
 	strictHandler := api.NewStrictHandler(server, nil)
 
-	// 4. Настройка роутера Chi
+	// Настройка роутера
 	r := chi.NewRouter()
 
-	// Middleware для логирования всех HTTP запросов
+	// Глобальные middleware (применяются ко всем запросам)
 	r.Use(middleware.Logger)
-
-	// Middleware для восстановления после паники (не даёт серверу упасть)
 	r.Use(middleware.Recoverer)
-
-	// Middleware для CORS (разрешает запросы с других доменов)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:3000", "http://localhost:8080"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -54,12 +45,16 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// 5. Регистрация всех эндпоинтов из OpenAPI спецификации
-	// HandlerFromMux автоматически добавляет маршруты:
-	// GET /categories, GET /series/{id}, POST /auth/login и т.д.
+	// AuthMiddleware должен быть применён к роутеру ДО регистрации хендлеров
+	// Оборачиваем весь роутер в AuthMiddleware
+	rWithAuth := chi.NewRouter()
+	rWithAuth.Use(api.AuthMiddleware(storeInstance))
+	rWithAuth.Mount("/", r)
+
+	// Регистрация всех эндпоинтов
 	api.HandlerFromMux(strictHandler, r)
 
-	// 6. Запуск HTTP сервера на порту 8080
+	// Запуск сервера (используем rWithAuth вместо r)
 	log.Println("Сервер запущен на http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", r))
+	log.Fatal(http.ListenAndServe(":8080", rWithAuth))
 }

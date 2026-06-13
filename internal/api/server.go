@@ -13,32 +13,35 @@ import (
 	"github.com/pprAImm/database/store"
 )
 
-// Server - структура сервера с хранилищем данных
+// Server - основная структура сервера, содержащая все обработчики API
 type Server struct {
-	Store store.Store
+	Store store.Store // слой доступа к базе данных
 }
 
-// NewServer создаёт новый экземпляр сервера
+// NewServer создаёт новый экземпляр сервера с переданным хранилищем
 func NewServer(s store.Store) *Server {
 	return &Server{Store: s}
 }
 
-// generateSessionID генерирует случайный идентификатор сессии
+// generateSessionID генерирует случайный 32-символьный идентификатор сессии в hex-формате
+// Используется для создания уникального токена сессии при входе пользователя
 func generateSessionID() (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
+	bytes := make([]byte, 16)                   // 16 байт = 128 бит
+	if _, err := rand.Read(bytes); err != nil { // заполняем случайными данными
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return hex.EncodeToString(bytes), nil // преобразуем в hex-строку
 }
 
-// hashPassword хеширует пароль с помощью bcrypt
+// hashPassword хеширует пароль с помощью bcrypt для безопасного хранения в БД
+// bcrypt автоматически добавляет соль и делает хеш устойчивым к перебору
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	return string(bytes), err
 }
 
-// checkPasswordHash проверяет соответствие пароля хешу
+// checkPasswordHash проверяет, соответствует ли введённый пароль сохранённому хешу
+// Сравнивает пароль с хешем, возвращает true если пароль верный
 func checkPasswordHash(password, hash string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
@@ -46,23 +49,26 @@ func checkPasswordHash(password, hash string) bool {
 
 // ==================== ЭНДПОЙНТЫ АВТОРИЗАЦИИ ====================
 
-// Register обрабатывает POST /auth/register - регистрация пользователя
+// Register обрабатывает POST /auth/register - регистрация нового пользователя
+// Принимает email, пароль и имя пользователя, создаёт запись в таблице users
+// Пароль хешируется перед сохранением
 func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (RegisterResponseObject, error) {
 	log.Printf("POST /auth/register: %s", request.Body.Email)
 
-	// Хешируем пароль
+	// Хешируем пароль перед сохранением в БД
 	hashedPassword, err := hashPassword(request.Body.Password)
 	if err != nil {
-		return Register409JSONResponse{Error: "Внутренняя ошибка"}, nil
+		return Register409JSONResponse{Error: "Внутренняя ошибка сервера"}, nil
 	}
 
-	// Создаём пользователя в БД (явно преобразуем email в string)
+	// Создаём пользователя в базе данных
+	// string(request.Body.Email) - преобразуем т.к. request.Body.Email имеет специальный тип
 	user, err := s.Store.CreateUser(ctx, request.Body.Username, string(request.Body.Email), hashedPassword)
 	if err != nil {
 		return Register409JSONResponse{Error: "Пользователь с таким email уже существует"}, nil
 	}
 
-	// Возвращаем данные созданного пользователя
+	// Возвращаем данные созданного пользователя (без пароля)
 	return Register201JSONResponse{
 		Email:    openapi_types.Email(user.Email),
 		Id:       int(user.ID),
@@ -70,22 +76,23 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 	}, nil
 }
 
-// Login обрабатывает POST /auth/login - вход пользователя
+// Login обрабатывает POST /auth/login - вход пользователя и создание сессии
+// Проверяет email и пароль, при успехе создаёт сессию и устанавливает cookie
 func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginResponseObject, error) {
 	log.Printf("POST /auth/login: %s", request.Body.Email)
 
-	// Ищем пользователя по email (явно преобразуем в string)
+	// Ищем пользователя по email
 	user, err := s.Store.GetUserByEmail(ctx, string(request.Body.Email))
 	if err != nil {
 		return Login401JSONResponse{Error: "Неверный email или пароль"}, nil
 	}
 
-	// Проверяем пароль
+	// Проверяем пароль (сравниваем введённый с хешем из БД)
 	if !checkPasswordHash(request.Body.Password, user.PasswordHash) {
 		return Login401JSONResponse{Error: "Неверный email или пароль"}, nil
 	}
 
-	// Создаём токен сессии
+	// Генерируем уникальный ID для сессии
 	sessionID, err := generateSessionID()
 	if err != nil {
 		return Login401JSONResponse{Error: "Не удалось создать сессию"}, nil
@@ -99,7 +106,9 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 		return Login401JSONResponse{Error: "Не удалось создать сессию"}, nil
 	}
 
-	// Устанавливаем cookie
+	// Устанавливаем HTTP-only cookie для хранения ID сессии
+	// HttpOnly - защита от XSS атак (JavaScript не может прочитать cookie)
+	// Path=/ - cookie действует на всём сайте
 	setCookie := "session_id=" + sessionID + "; HttpOnly; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
 
 	// Возвращаем данные пользователя и cookie
@@ -119,15 +128,34 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 	}, nil
 }
 
-// Logout обрабатывает POST /auth/logout - выход пользователя
+// Logout обрабатывает POST /auth/logout - выход пользователя и удаление сессии
+// Удаляет сессию из БД, чтобы cookie стала невалидной
 func (s *Server) Logout(ctx context.Context, request LogoutRequestObject) (LogoutResponseObject, error) {
 	log.Println("POST /auth/logout")
+
+	// Получаем ID сессии из контекста (установлен middleware AuthMiddleware)
+	sessionID, ok := GetSessionIDFromContext(ctx)
+	if !ok {
+		// Если сессии нет, просто выходим
+		return Logout200Response{}, nil
+	}
+
+	// Удаляем сессию из базы данных
+	err := s.Store.DeleteSession(ctx, sessionID)
+	if err != nil {
+		log.Printf("Ошибка удаления сессии %s: %v", sessionID, err)
+	} else {
+		log.Printf("Сессия %s успешно удалена", sessionID)
+	}
+
+	// Возвращаем пустой ответ (браузер сам очистит cookie)
 	return Logout200Response{}, nil
 }
 
 // ==================== ЭНДПОЙНТЫ КАТЕГОРИЙ ====================
 
-// GetAllCategories обрабатывает GET /categories - получение всех категорий
+// GetAllCategories обрабатывает GET /categories - получение списка всех категорий
+// Используется на главной странице для отображения всех доступных категорий
 func (s *Server) GetAllCategories(ctx context.Context, request GetAllCategoriesRequestObject) (GetAllCategoriesResponseObject, error) {
 	log.Println("GET /categories")
 
@@ -138,7 +166,7 @@ func (s *Server) GetAllCategories(ctx context.Context, request GetAllCategoriesR
 		return GetAllCategories200JSONResponse{}, nil
 	}
 
-	// Конвертируем в формат ответа
+	// Конвертируем модели БД в формат ответа API
 	result := make(GetAllCategories200JSONResponse, len(categories))
 	for i, cat := range categories {
 		result[i] = struct {
@@ -155,20 +183,21 @@ func (s *Server) GetAllCategories(ctx context.Context, request GetAllCategoriesR
 	return result, nil
 }
 
-// GetCategoryBySlug обрабатывает GET /categories/{slug} - получение категории по slug
+// GetCategoryBySlug обрабатывает GET /categories/{slug} - получение категории и её сериалов
+// Возвращает информацию о категории и список сериалов, принадлежащих этой категории
 func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlugRequestObject) (GetCategoryBySlugResponseObject, error) {
 	log.Printf("GET /categories/%s", request.Slug)
 
-	// Получаем категорию из БД
+	// Получаем категорию по slug (человекочитаемый идентификатор)
 	category, err := s.Store.GetCategoryBySlug(ctx, request.Slug)
 	if err != nil {
 		return GetCategoryBySlug404JSONResponse{Error: "Категория не найдена"}, nil
 	}
 
 	// Получаем сериалы этой категории
-	series, err := s.Store.GetSeriesByCategory(ctx, &category.ID)
+	seriesList, err := s.Store.GetSeriesByCategory(ctx, &category.ID)
 	if err != nil {
-		// Возвращаем категорию без сериалов при ошибке
+		// В случае ошибки возвращаем только категорию без сериалов
 		result := GetCategoryBySlug200JSONResponse{
 			Category: &struct {
 				Id   int    `json:"id"`
@@ -183,7 +212,7 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 		return result, nil
 	}
 
-	// Формируем ответ
+	// Формируем ответ с категорией
 	result := GetCategoryBySlug200JSONResponse{
 		Category: &struct {
 			Id   int    `json:"id"`
@@ -196,8 +225,8 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 		},
 	}
 
-	// Конвертируем сериалы в формат ответа
-	if len(series) > 0 {
+	// Конвертируем сериалы в формат ответа API
+	if len(seriesList) > 0 {
 		apiSeries := make([]struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
 			CategoryId    *int     `json:"category_id,omitempty"`
@@ -205,16 +234,9 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 			Description   *string  `json:"description,omitempty"`
 			Id            int      `json:"id"`
 			Title         string   `json:"title"`
-		}, len(series))
+		}, len(seriesList))
 
-		for i, s := range series {
-			var avgRating *float32
-			if s.Rating.Valid {
-				f, _ := s.Rating.Float64Value()
-				val := float32(f.Float64)
-				avgRating = &val
-			}
-
+		for i, s := range seriesList {
 			apiSeries[i] = struct {
 				AverageRating *float32 `json:"average_rating,omitempty"`
 				CategoryId    *int     `json:"category_id,omitempty"`
@@ -228,7 +250,7 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 				Description:   s.Description,
 				CoverUrl:      s.CoverUrl,
 				CategoryId:    nil,
-				AverageRating: avgRating,
+				AverageRating: nil, // рейтинг вычисляется отдельно через /series/{id}/rating
 			}
 		}
 		result.Series = &apiSeries
@@ -239,11 +261,12 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 
 // ==================== ЭНДПОЙНТЫ СЕРИАЛОВ ====================
 
-// GetSeriesById обрабатывает GET /series/{id} - получение сериала по ID
+// GetSeriesById обрабатывает GET /series/{id} - получение сериала с эпизодами
+// Возвращает полную информацию о сериале и список всех его эпизодов
 func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequestObject) (GetSeriesByIdResponseObject, error) {
 	log.Printf("GET /series/%d", request.Id)
 
-	// Получаем сериал из БД
+	// Получаем сериал по ID
 	series, err := s.Store.GetSeriesByID(ctx, int64(request.Id))
 	if err != nil {
 		return GetSeriesById404JSONResponse{Error: "Сериал не найден"}, nil
@@ -252,7 +275,7 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 	// Получаем эпизоды сериала
 	episodes, err := s.Store.GetEpisodesBySeries(ctx, &series.ID)
 	if err != nil {
-		// Возвращаем сериал без эпизодов при ошибке
+		// В случае ошибки возвращаем только сериал без эпизодов
 		result := GetSeriesById200JSONResponse{
 			Series: &struct {
 				AverageRating *float32 `json:"average_rating,omitempty"`
@@ -262,17 +285,18 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 				Id            int      `json:"id"`
 				Title         string   `json:"title"`
 			}{
-				Id:          int(series.ID),
-				Title:       series.Title,
-				Description: series.Description,
-				CoverUrl:    series.CoverUrl,
-				CategoryId:  nil,
+				Id:            int(series.ID),
+				Title:         series.Title,
+				Description:   series.Description,
+				CoverUrl:      series.CoverUrl,
+				CategoryId:    nil,
+				AverageRating: nil,
 			},
 		}
 		return result, nil
 	}
 
-	// Формируем ответ
+	// Формируем ответ с сериалом
 	result := GetSeriesById200JSONResponse{
 		Series: &struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
@@ -282,15 +306,16 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 			Id            int      `json:"id"`
 			Title         string   `json:"title"`
 		}{
-			Id:          int(series.ID),
-			Title:       series.Title,
-			Description: series.Description,
-			CoverUrl:    series.CoverUrl,
-			CategoryId:  nil,
+			Id:            int(series.ID),
+			Title:         series.Title,
+			Description:   series.Description,
+			CoverUrl:      series.CoverUrl,
+			CategoryId:    nil,
+			AverageRating: nil,
 		},
 	}
 
-	// Конвертируем эпизоды в формат ответа
+	// Конвертируем эпизоды в формат ответа API
 	if len(episodes) > 0 {
 		apiEpisodes := make([]struct {
 			EpisodeNum *int    `json:"episode_num,omitempty"`
@@ -332,7 +357,8 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 	return result, nil
 }
 
-// SearchSeries обрабатывает GET /series/search - поиск сериалов
+// SearchSeries обрабатывает GET /series/search - поиск сериалов по названию
+// Использует ILIKE для регистронезависимого поиска по части названия
 func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestObject) (SearchSeriesResponseObject, error) {
 	log.Printf("GET /series/search?q=%s", request.Params.Q)
 
@@ -343,16 +369,9 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 		return SearchSeries200JSONResponse{}, nil
 	}
 
-	// Конвертируем результаты в формат ответа
+	// Конвертируем результаты в формат ответа API
 	apiResults := make(SearchSeries200JSONResponse, len(results))
 	for i, r := range results {
-		var avgRating *float32
-		if r.Rating.Valid {
-			f, _ := r.Rating.Float64Value()
-			val := float32(f.Float64)
-			avgRating = &val
-		}
-
 		apiResults[i] = struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
 			CategoryId    *int     `json:"category_id,omitempty"`
@@ -366,7 +385,7 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 			Description:   r.Description,
 			CoverUrl:      r.CoverUrl,
 			CategoryId:    nil,
-			AverageRating: avgRating,
+			AverageRating: nil,
 		}
 	}
 
@@ -375,17 +394,19 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 
 // ==================== ЭНДПОЙНТЫ КОММЕНТАРИЕВ ====================
 
-// GetSeriesComments обрабатывает GET /series/{id}/comments - получение комментариев
+// GetSeriesComments обрабатывает GET /series/{id}/comments - получение всех комментариев к сериалу
+// Возвращает список комментариев, отсортированных от новых к старым
 func (s *Server) GetSeriesComments(ctx context.Context, request GetSeriesCommentsRequestObject) (GetSeriesCommentsResponseObject, error) {
 	log.Printf("GET /series/%d/comments", request.Id)
 
 	seriesID := int64(request.Id)
+	// Получаем комментарии из БД
 	comments, err := s.Store.GetCommentsBySeries(ctx, &seriesID)
 	if err != nil {
 		return GetSeriesComments200JSONResponse{}, nil
 	}
 
-	// Конвертируем комментарии в формат ответа
+	// Конвертируем комментарии в формат ответа API
 	apiComments := make(GetSeriesComments200JSONResponse, len(comments))
 	for i, c := range comments {
 		apiComments[i] = struct {
@@ -404,12 +425,13 @@ func (s *Server) GetSeriesComments(ctx context.Context, request GetSeriesComment
 	return apiComments, nil
 }
 
-// AddComment обрабатывает POST /series/{id}/comments - добавление комментария
-// Требует авторизации (userID извлекается из контекста middleware)
+// AddComment обрабатывает POST /series/{id}/comments - добавление нового комментария
+// Требует авторизации (userID извлекается из контекста, установленного middleware)
+// Возвращает созданный комментарий с реальным именем пользователя из БД
 func (s *Server) AddComment(ctx context.Context, request AddCommentRequestObject) (AddCommentResponseObject, error) {
 	log.Printf("POST /series/%d/comments: %s", request.Id, request.Body.Body)
 
-	// Получаем userID из контекста (установлен middleware AuthMiddleware)
+	// Получаем ID текущего пользователя из контекста (установлен middleware AuthMiddleware)
 	userID, ok := GetUserIDFromContext(ctx)
 	if !ok {
 		return AddComment401JSONResponse{Error: "Требуется авторизация"}, nil
@@ -423,10 +445,16 @@ func (s *Server) AddComment(ctx context.Context, request AddCommentRequestObject
 		return AddComment400JSONResponse{Error: "Не удалось добавить комментарий"}, nil
 	}
 
-	// Возвращаем созданный комментарий
+	// Получаем имя пользователя из БД для ответа (чтобы вернуть актуальное имя, а не заглушку)
+	user, err := s.Store.GetUserByID(ctx, userID)
+	if err != nil {
+		return AddComment400JSONResponse{Error: "Пользователь не найден"}, nil
+	}
+
+	// Возвращаем созданный комментарий с реальным именем пользователя
 	return AddComment201JSONResponse{
 		Id:        int(comment.ID),
-		Username:  "current_user",
+		Username:  user.Username,
 		Body:      comment.Body,
 		CreatedAt: comment.CreatedAt,
 	}, nil
@@ -434,17 +462,20 @@ func (s *Server) AddComment(ctx context.Context, request AddCommentRequestObject
 
 // ==================== ЭНДПОЙНТЫ РЕЙТИНГА ====================
 
-// GetSeriesRating обрабатывает GET /series/{id}/rating - получение среднего рейтинга
+// GetSeriesRating обрабатывает GET /series/{id}/rating - получение среднего рейтинга сериала
+// Рейтинг вычисляется через AVG() из таблицы ratings
+// Не требует авторизации (любой может посмотреть рейтинг)
 func (s *Server) GetSeriesRating(ctx context.Context, request GetSeriesRatingRequestObject) (GetSeriesRatingResponseObject, error) {
 	log.Printf("GET /series/%d/rating", request.Id)
 
 	seriesID := int64(request.Id)
+	// Получаем среднюю оценку из БД
 	rating, err := s.Store.GetAverageRating(ctx, &seriesID)
 	if err != nil {
 		return GetSeriesRating404JSONResponse{Error: "Сериал не найден"}, nil
 	}
 
-	// Извлекаем числовое значение из pgtype.Numeric
+	// Извлекаем числовое значение из pgtype.Numeric (особый тип PostgreSQL)
 	var avg float32
 	if rating.Valid {
 		f, _ := rating.Float64Value()
@@ -457,12 +488,13 @@ func (s *Server) GetSeriesRating(ctx context.Context, request GetSeriesRatingReq
 	}, nil
 }
 
-// RateSeries обрабатывает POST /series/{id}/rating - добавление/обновление оценки
-// Требует авторизации (userID извлекается из контекста middleware)
+// RateSeries обрабатывает POST /series/{id}/rating - добавление или обновление оценки пользователя
+// Требует авторизации (userID извлекается из контекста)
+// Один пользователь может иметь только одну оценку на сериал (UPSERT через ON CONFLICT)
 func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject) (RateSeriesResponseObject, error) {
 	log.Printf("POST /series/%d/rating: оценка %d", request.Id, request.Body.Score)
 
-	// Получаем userID из контекста (установлен middleware AuthMiddleware)
+	// Получаем ID текущего пользователя из контекста (установлен middleware AuthMiddleware)
 	userID, ok := GetUserIDFromContext(ctx)
 	if !ok {
 		return RateSeries401JSONResponse{Error: "Требуется авторизация"}, nil
@@ -471,13 +503,13 @@ func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject
 	seriesID := int64(request.Id)
 	score := int32(request.Body.Score)
 
-	// Сохраняем оценку в БД
+	// Сохраняем или обновляем оценку в БД (UPSERT через ON CONFLICT в SQL)
 	_, err := s.Store.UpsertRating(ctx, &userID, &seriesID, &score)
 	if err != nil {
 		return RateSeries400JSONResponse{Error: "Оценка должна быть от 1 до 10"}, nil
 	}
 
-	// Получаем обновлённый средний рейтинг
+	// Получаем обновлённый средний рейтинг после добавления новой оценки
 	rating, err := s.Store.GetAverageRating(ctx, &seriesID)
 	if err != nil {
 		return RateSeries200JSONResponse{

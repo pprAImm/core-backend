@@ -10,9 +10,12 @@ import (
 
 type contextKey string
 
-const UserIDKey contextKey = "userID"
+const (
+	UserIDKey    contextKey = "userID"
+	SessionIDKey contextKey = "sessionID"
+)
 
-// AuthMiddleware извлекает userID из сессионной cookie
+// AuthMiddleware извлекает userID и sessionID из сессионной cookie
 func AuthMiddleware(store store.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23,8 +26,10 @@ func AuthMiddleware(store store.Store) func(http.Handler) http.Handler {
 				return
 			}
 
+			sessionID := cookie.Value
+
 			// Ищем сессию в БД
-			session, err := store.GetSession(r.Context(), cookie.Value)
+			session, err := store.GetSession(r.Context(), sessionID)
 			if err != nil {
 				next.ServeHTTP(w, r)
 				return
@@ -36,8 +41,9 @@ func AuthMiddleware(store store.Store) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Кладём userID в контекст
+			// Кладём userID и sessionID в контекст
 			ctx := context.WithValue(r.Context(), UserIDKey, *session.UserID)
+			ctx = context.WithValue(ctx, SessionIDKey, sessionID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -47,4 +53,10 @@ func AuthMiddleware(store store.Store) func(http.Handler) http.Handler {
 func GetUserIDFromContext(ctx context.Context) (int64, bool) {
 	userID, ok := ctx.Value(UserIDKey).(int64)
 	return userID, ok
+}
+
+// GetSessionIDFromContext извлекает sessionID из контекста
+func GetSessionIDFromContext(ctx context.Context) (string, bool) {
+	sessionID, ok := ctx.Value(SessionIDKey).(string)
+	return sessionID, ok
 }
