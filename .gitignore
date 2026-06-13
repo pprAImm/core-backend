@@ -30,6 +30,7 @@ api/.split-tmp/
 # Сессионные файлы
 cookies.txt
 *.cookie
+cook*.*
 
 # Логи
 *.log

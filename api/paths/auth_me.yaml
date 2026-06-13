@@ -1,0 +1,24 @@
+get:
+  operationId: getCurrentUser
+  summary: Получить текущего пользователя
+  description: Возвращает данные авторизованного пользователя
+  security:
+    - cookieAuth: []
+  responses:
+    "200":
+      description: Данные пользователя
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              id:
+                type: integer
+              username:
+                type: string
+              email:
+                type: string
+    "401":
+      $ref: ../components/responses/Unauthorized.yaml
+  tags:
+    - Авторизация
