@@ -4,13 +4,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	openapi_types "github.com/oapi-codegen/runtime/types"
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/pprAImm/database/store"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Server - основная структура сервера, содержащая все обработчики API
@@ -61,7 +62,7 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 		return Register409JSONResponse{Error: "Внутренняя ошибка сервера"}, nil
 	}
 
-	// Создаём пользователя в базе данных
+	// Создаем пользователя в базе данных
 	// string(request.Body.Email) - преобразуем т.к. request.Body.Email имеет специальный тип
 	user, err := s.Store.CreateUser(ctx, request.Body.Username, string(request.Body.Email), hashedPassword)
 	if err != nil {
@@ -125,6 +126,36 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 		Headers: Login200ResponseHeaders{
 			SetCookie: &setCookie,
 		},
+	}, nil
+}
+
+// GetCurrentUser обрабатывает GET /auth/me - получение текущего пользователя
+func (s *Server) GetCurrentUser(ctx context.Context, request GetCurrentUserRequestObject) (GetCurrentUserResponseObject, error) {
+	log.Println("GET /auth/me")
+
+	// Получаем ID текущего пользователя из контекста
+	userID, ok := GetUserIDFromContext(ctx)
+	if !ok {
+		return GetCurrentUser401JSONResponse{Error: "Требуется авторизация"}, nil
+	}
+
+	// Получаем данные пользователя из БД
+	user, err := s.Store.GetUserByID(ctx, userID)
+	if err != nil {
+		log.Printf("GetCurrentUser: пользователь не найден: %v", err)
+		return GetCurrentUser401JSONResponse{Error: "Пользователь не найден"}, nil
+	}
+
+	// Создаём указатели для полей (т.к. структура ожидает *int, *string)
+	id := int(user.ID)
+	username := user.Username
+	email := user.Email
+
+	// Возвращаем данные пользователя с указателями
+	return GetCurrentUser200JSONResponse{
+		Id:       &id,
+		Username: &username,
+		Email:    &email,
 	}, nil
 }
 
@@ -428,13 +459,19 @@ func (s *Server) GetSeriesComments(ctx context.Context, request GetSeriesComment
 // AddComment обрабатывает POST /series/{id}/comments - добавление нового комментария
 // Требует авторизации (userID извлекается из контекста, установленного middleware)
 // Возвращает созданный комментарий с реальным именем пользователя из БД
+// AddComment обрабатывает POST /series/{id}/comments
 func (s *Server) AddComment(ctx context.Context, request AddCommentRequestObject) (AddCommentResponseObject, error) {
 	log.Printf("POST /series/%d/comments: %s", request.Id, request.Body.Body)
 
-	// Получаем ID текущего пользователя из контекста (установлен middleware AuthMiddleware)
+	// СНАЧАЛА проверяем авторизацию
 	userID, ok := GetUserIDFromContext(ctx)
 	if !ok {
 		return AddComment401JSONResponse{Error: "Требуется авторизация"}, nil
+	}
+
+	// ПОТОМ проверяем валидность данных
+	if request.Body.Body == "" {
+		return AddComment400JSONResponse{Error: "Комментарий не может быть пустым"}, nil
 	}
 
 	seriesID := int64(request.Id)
@@ -442,16 +479,16 @@ func (s *Server) AddComment(ctx context.Context, request AddCommentRequestObject
 	// Сохраняем комментарий в БД
 	comment, err := s.Store.AddComment(ctx, &userID, &seriesID, request.Body.Body)
 	if err != nil {
+		log.Printf("AddComment: AddComment error: %v", err)
 		return AddComment400JSONResponse{Error: "Не удалось добавить комментарий"}, nil
 	}
 
-	// Получаем имя пользователя из БД для ответа (чтобы вернуть актуальное имя, а не заглушку)
+	// Получаем имя пользователя
 	user, err := s.Store.GetUserByID(ctx, userID)
 	if err != nil {
 		return AddComment400JSONResponse{Error: "Пользователь не найден"}, nil
 	}
 
-	// Возвращаем созданный комментарий с реальным именем пользователя
 	return AddComment201JSONResponse{
 		Id:        int(comment.ID),
 		Username:  user.Username,
@@ -469,22 +506,15 @@ func (s *Server) GetSeriesRating(ctx context.Context, request GetSeriesRatingReq
 	log.Printf("GET /series/%d/rating", request.Id)
 
 	seriesID := int64(request.Id)
-	// Получаем среднюю оценку из БД
-	rating, err := s.Store.GetAverageRating(ctx, &seriesID)
+	// Получаем среднюю оценку из БД (возвращает float64)
+	avg, err := s.Store.GetAverageRating(ctx, &seriesID)
 	if err != nil {
 		return GetSeriesRating404JSONResponse{Error: "Сериал не найден"}, nil
 	}
 
-	// Извлекаем числовое значение из pgtype.Numeric (особый тип PostgreSQL)
-	var avg float32
-	if rating.Valid {
-		f, _ := rating.Float64Value()
-		avg = float32(f.Float64)
-	}
-
 	return GetSeriesRating200JSONResponse{
 		SeriesId: request.Id,
-		Average:  avg,
+		Average:  float32(avg),
 	}, nil
 }
 
@@ -494,38 +524,52 @@ func (s *Server) GetSeriesRating(ctx context.Context, request GetSeriesRatingReq
 func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject) (RateSeriesResponseObject, error) {
 	log.Printf("POST /series/%d/rating: оценка %d", request.Id, request.Body.Score)
 
-	// Получаем ID текущего пользователя из контекста (установлен middleware AuthMiddleware)
-	userID, ok := GetUserIDFromContext(ctx)
-	if !ok {
-		return RateSeries401JSONResponse{Error: "Требуется авторизация"}, nil
-	}
-
-	seriesID := int64(request.Id)
-	score := int32(request.Body.Score)
-
-	// Сохраняем или обновляем оценку в БД (UPSERT через ON CONFLICT в SQL)
-	_, err := s.Store.UpsertRating(ctx, &userID, &seriesID, &score)
-	if err != nil {
+	// Проверяем валидность оценки
+	if request.Body.Score < 1 || request.Body.Score > 10 {
 		return RateSeries400JSONResponse{Error: "Оценка должна быть от 1 до 10"}, nil
 	}
 
-	// Получаем обновлённый средний рейтинг после добавления новой оценки
-	rating, err := s.Store.GetAverageRating(ctx, &seriesID)
+	// Получаем userID из контекста
+	userID, ok := GetUserIDFromContext(ctx)
+	if !ok {
+		log.Printf("RateSeries: userID not found in context")
+		return RateSeries401JSONResponse{Error: "Требуется авторизация"}, nil
+	}
+	log.Printf("RateSeries: userID=%d", userID)
+
+	seriesID := int64(request.Id)
+	log.Printf("RateSeries: seriesID=%d", seriesID)
+
+	// Конвертируем оценку в pgtype.Numeric
+	ratingValue := pgtype.Numeric{}
+	log.Printf("RateSeries: converting score %d to pgtype.Numeric", request.Body.Score)
+	if err := ratingValue.Scan(fmt.Sprintf("%d", request.Body.Score)); err != nil {
+		log.Printf("RateSeries: Scan error: %v", err)
+		return RateSeries400JSONResponse{Error: "Неверный формат оценки"}, nil
+	}
+	log.Printf("RateSeries: ratingValue=%+v", ratingValue)
+
+	// Сохраняем оценку
+	_, err := s.Store.UpsertRating(ctx, &userID, &seriesID, ratingValue)
 	if err != nil {
+		log.Printf("RateSeries: UpsertRating error: %v", err)
+		return RateSeries400JSONResponse{Error: "Не удалось сохранить оценку"}, nil
+	}
+	log.Printf("RateSeries: UpsertRating успешно")
+
+	// Получаем средний рейтинг
+	avg, err := s.Store.GetAverageRating(ctx, &seriesID)
+	if err != nil {
+		log.Printf("RateSeries: GetAverageRating error: %v", err)
 		return RateSeries200JSONResponse{
 			SeriesId: request.Id,
 			Average:  0,
 		}, nil
 	}
-
-	var avg float32
-	if rating.Valid {
-		f, _ := rating.Float64Value()
-		avg = float32(f.Float64)
-	}
+	log.Printf("RateSeries: средний рейтинг = %f", avg)
 
 	return RateSeries200JSONResponse{
 		SeriesId: request.Id,
-		Average:  avg,
+		Average:  float32(avg),
 	}, nil
 }
