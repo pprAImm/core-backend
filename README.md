@@ -77,7 +77,12 @@ psql "$DATABASE_URL" -f database/sql/test.sql
 
 ```bash
 cd core-backend
-DATABASE_URL="postgres://admin:1@localhost:5432/series?sslmode=disable" go run ./cmd/server/
+#создаём файл .env для подключения к существующей бд 
+cat > .env << 'EOF'
+DATABASE_URL=postgres://team5:ПАРОЛЬ@212.8.228.70:5432/event?sslmode=require
+EOF
+
+go run ./cmd/server/
 ```
 
 Сервер запустится на `http://localhost:8080`.
