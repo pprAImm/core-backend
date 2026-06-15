@@ -256,7 +256,7 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 		},
 	}
 
-	// Конвертируем сериалы в формат ответа API
+	// Конвертируем сериалы в формат ответа API (включая category_id и average_rating)
 	if len(seriesList) > 0 {
 		apiSeries := make([]struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
@@ -267,7 +267,21 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 			Title         string   `json:"title"`
 		}, len(seriesList))
 
-		for i, s := range seriesList {
+		for i, ser := range seriesList {
+			// category id
+			var catID *int
+			if category.ID != 0 {
+				v := int(category.ID)
+				catID = &v
+			}
+
+			// average rating (optional)
+			var avgPtr *float32
+			if avgFloat, err := s.Store.GetAverageRating(ctx, &ser.ID); err == nil {
+				v := float32(avgFloat)
+				avgPtr = &v
+			}
+
 			apiSeries[i] = struct {
 				AverageRating *float32 `json:"average_rating,omitempty"`
 				CategoryId    *int     `json:"category_id,omitempty"`
@@ -276,12 +290,12 @@ func (s *Server) GetCategoryBySlug(ctx context.Context, request GetCategoryBySlu
 				Id            int      `json:"id"`
 				Title         string   `json:"title"`
 			}{
-				Id:            int(s.ID),
-				Title:         s.Title,
-				Description:   s.Description,
-				CoverUrl:      s.CoverUrl,
-				CategoryId:    nil,
-				AverageRating: nil, // рейтинг вычисляется отдельно через /series/{id}/rating
+				Id:            int(ser.ID),
+				Title:         ser.Title,
+				Description:   ser.Description,
+				CoverUrl:      ser.CoverUrl,
+				CategoryId:    catID,
+				AverageRating: avgPtr,
 			}
 		}
 		result.Series = &apiSeries
@@ -327,7 +341,7 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 		return result, nil
 	}
 
-	// Формируем ответ с сериалом
+	// Формируем ответ с сериалом (включаем category_id и average_rating)
 	result := GetSeriesById200JSONResponse{
 		Series: &struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
@@ -344,6 +358,12 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 			CategoryId:    nil,
 			AverageRating: nil,
 		},
+	}
+
+	// average rating
+	if avgFloat, err := s.Store.GetAverageRating(ctx, &series.ID); err == nil {
+		v := float32(avgFloat)
+		result.Series.AverageRating = &v
 	}
 
 	// Конвертируем эпизоды в формат ответа API
@@ -507,14 +527,14 @@ func (s *Server) GetSeriesRating(ctx context.Context, request GetSeriesRatingReq
 
 	seriesID := int64(request.Id)
 	// Получаем среднюю оценку из БД (возвращает float64)
-	avg, err := s.Store.GetAverageRating(ctx, &seriesID)
+	avgFloat, err := s.Store.GetAverageRating(ctx, &seriesID)
 	if err != nil {
 		return GetSeriesRating404JSONResponse{Error: "Сериал не найден"}, nil
 	}
 
 	return GetSeriesRating200JSONResponse{
 		SeriesId: request.Id,
-		Average:  float32(avg),
+		Average:  float32(avgFloat),
 	}, nil
 }
 
