@@ -4,3 +4,4 @@ include .make/help.mk
 include .make/deps.mk
 include .make/openapi.mk
 include .make/go.mk
+include .make/docker.mk 

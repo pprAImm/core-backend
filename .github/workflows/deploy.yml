@@ -1,0 +1,44 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main          # deploy при пуше в main
+      - feature/finalbackend  # deploy при пуше в feature/finalbackend
+      - feature/backend2  # deploy при пуше в feature/backend2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build Docker image
+        run: docker build -t core-backend:latest .
+      
+      - name: Save Docker image
+        run: docker save core-backend:latest -o core-backend.tar
+      
+      - name: Copy to server
+        run: |
+          echo "${{ secrets.SERVER_PASSWORD }}" | sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp -o StrictHostKeyChecking=no core-backend.tar root@${{ secrets.SERVER_IP }}:/root/
+      
+      - name: Deploy on server
+        run: |
+          echo "${{ secrets.SERVER_PASSWORD }}" | sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no root@${{ secrets.SERVER_IP }} << 'EOF'
+            docker load -i /root/core-backend.tar
+            docker stop core-backend || true
+            docker rm core-backend || true
+            docker run -d \
+              --name core-backend \
+              --restart always \
+              -p 8080:8080 \
+              --env-file /root/.env \
+              core-backend:latest
+            rm -f /root/core-backend.tar
+          EOF

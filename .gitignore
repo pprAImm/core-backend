@@ -55,3 +55,6 @@ coverage.html
 # Go workspace
 go.work
 go.work.sum
+
+# Docker deploy
+core-backend.tar
