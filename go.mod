@@ -8,7 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/oapi-codegen/runtime v1.4.1
-	github.com/pprAImm/database v0.0.0-20260615102503-f058da3896b4
+	github.com/pprAImm/database v0.0.0-20260615104825-6cf418ea39d6
 	golang.org/x/crypto v0.53.0
 )
 

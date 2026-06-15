@@ -31,7 +31,11 @@ func main() {
 		log.Println("⚠️ DATABASE_URL не найден в окружении")
 	} else {
 		// Выводим URL (скрывая пароль)
-		log.Printf("DATABASE_URL найден: %s...", dbURL[:50])
+		if len(dbURL) > 50 {
+			log.Printf("DATABASE_URL найден: %s...", dbURL[:50])
+		} else {
+			log.Printf("DATABASE_URL найден: %s", dbURL)
+		}
 	}
 
 	// Подключение к базе данных
