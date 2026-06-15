@@ -2,10 +2,7 @@ name: Deploy to Server
 
 on:
   push:
-    branches:
-      - main          # deploy при пуше в main
-      - feature/finalbackend  # deploy при пуше в feature/finalbackend
-      - feature/backend2  # deploy при пуше в feature/backend2
+    branches: [main, feature/backend2, feature/finalbackend]
 
 jobs:
   deploy:
@@ -18,6 +15,11 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
       - name: Build Docker image
         run: docker build -t core-backend:latest .
       
@@ -25,12 +27,11 @@ jobs:
         run: docker save core-backend:latest -o core-backend.tar
       
       - name: Copy to server
-        run: |
-          echo "${{ secrets.SERVER_PASSWORD }}" | sshpass -p "${{ secrets.SERVER_PASSWORD }}" scp -o StrictHostKeyChecking=no core-backend.tar root@${{ secrets.SERVER_IP }}:/root/
+        run: scp -o StrictHostKeyChecking=no core-backend.tar root@185.23.34.25:/root/
       
       - name: Deploy on server
         run: |
-          echo "${{ secrets.SERVER_PASSWORD }}" | sshpass -p "${{ secrets.SERVER_PASSWORD }}" ssh -o StrictHostKeyChecking=no root@${{ secrets.SERVER_IP }} << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@185.23.34.25 << 'EOF'
             docker load -i /root/core-backend.tar
             docker stop core-backend || true
             docker rm core-backend || true
