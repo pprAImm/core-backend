@@ -3,10 +3,12 @@ package main
 import (
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/joho/godotenv"
 
 	"github.com/pprAImm/core-backend/internal/api"
 	"github.com/pprAImm/database"
@@ -15,6 +17,22 @@ import (
 
 func main() {
 	log.Println("Запуск сервера...")
+
+	// Загружаем .env файл
+	if err := godotenv.Load(); err != nil {
+		log.Println("Предупреждение: .env файл не найден")
+	} else {
+		log.Println(".env файл загружен успешно")
+	}
+
+	// Проверяем, что переменная установилась
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		log.Println("⚠️ DATABASE_URL не найден в окружении")
+	} else {
+		// Выводим URL (скрывая пароль)
+		log.Printf("DATABASE_URL найден: %s...", dbURL[:50])
+	}
 
 	// Подключение к базе данных
 	pool, err := database.Init()
@@ -34,8 +52,6 @@ func main() {
 
 	// Настройка роутера
 	r := chi.NewRouter()
-
-	// Глобальные middleware (применяются ко всем запросам)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
@@ -45,16 +61,13 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// AuthMiddleware должен быть применён к роутеру ДО регистрации хендлеров
-	// Оборачиваем весь роутер в AuthMiddleware
-	rWithAuth := chi.NewRouter()
-	rWithAuth.Use(api.AuthMiddleware(storeInstance))
-	rWithAuth.Mount("/", r)
+	// AuthMiddleware для авторизации
+	handler := api.AuthMiddleware(storeInstance)(r)
 
 	// Регистрация всех эндпоинтов
 	api.HandlerFromMux(strictHandler, r)
 
-	// Запуск сервера (используем rWithAuth вместо r)
+	// Запуск сервера
 	log.Println("Сервер запущен на http://localhost:8080")
-	log.Fatal(http.ListenAndServe(":8080", rWithAuth))
+	log.Fatal(http.ListenAndServe(":8080", handler))
 }
