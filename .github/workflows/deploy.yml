@@ -5,6 +5,10 @@ on:
     branches: [main, feature/backend2, feature/finalbackend]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -15,24 +19,30 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/ppraimm/core-backend:latest
+
       - name: Install SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      - name: Build Docker image
-        run: docker build -t core-backend:latest .
-
-      - name: Save Docker image
-        run: docker save core-backend:latest -o core-backend.tar
-
-      - name: Copy to server
-        run: scp -o StrictHostKeyChecking=no core-backend.tar root@185.23.34.25:/root/
-
       - name: Deploy on server
         run: |
           ssh -o StrictHostKeyChecking=no root@185.23.34.25 << 'EOF'
-            docker load -i /root/core-backend.tar
+            docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GHCR_TOKEN }}
+            docker pull ghcr.io/ppraimm/core-backend:latest
             docker stop core-backend || true
             docker rm core-backend || true
             docker run -d \
@@ -40,6 +50,6 @@ jobs:
               --restart always \
               -p 8080:8080 \
               --env-file /root/.env \
-              core-backend:latest
-            rm -f /root/core-backend.tar
+              ghcr.io/ppraimm/core-backend:latest
+            docker image prune -f
           EOF
