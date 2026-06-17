@@ -8,7 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/oapi-codegen/runtime v1.4.1
-	github.com/pprAImm/database v0.0.0-20260617101523-a017ff3c2e12
+	github.com/pprAImm/database v0.0.0-20260617124153-d81e077b230c
 	golang.org/x/crypto v0.53.0
 )
 
@@ -21,5 +21,3 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 )
-
-replace github.com/pprAImm/database => ../database
