@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,8 @@ import (
 	"github.com/pprAImm/core-backend/internal/api"
 	"github.com/pprAImm/database"
 	"github.com/pprAImm/database/store"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -70,6 +73,89 @@ func main() {
 
 	// Регистрация всех эндпоинтов
 	api.HandlerFromMux(strictHandler, r)
+
+	// Кастомные эндпоинты профиля (вне OpenAPI spec)
+	r.Put("/auth/me/username", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body struct {
+			Username string `json:"username"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
+			return
+		}
+		if body.Username == "" {
+			http.Error(w, `{"error":"Имя не может быть пустым"}`, http.StatusBadRequest)
+			return
+		}
+
+		user, err := storeInstance.UpdateUsername(r.Context(), userID, body.Username)
+		if err != nil {
+			http.Error(w, `{"error":"Не удалось обновить имя"}`, http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+		})
+	})
+
+	r.Put("/auth/me/password", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		var body struct {
+			CurrentPassword string `json:"current_password"`
+			NewPassword     string `json:"new_password"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
+			return
+		}
+		if body.NewPassword == "" {
+			http.Error(w, `{"error":"Новый пароль не может быть пустым"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Получаем текущий хеш пароля
+		user, err := storeInstance.GetUserByIDWithPassword(r.Context(), userID)
+		if err != nil {
+			http.Error(w, `{"error":"Пользователь не найден"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Проверяем текущий пароль
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)); err != nil {
+			http.Error(w, `{"error":"Неверный текущий пароль"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Хешируем новый пароль
+		hashed, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
+			return
+		}
+
+		if err := storeInstance.UpdatePassword(r.Context(), userID, string(hashed)); err != nil {
+			http.Error(w, `{"error":"Не удалось обновить пароль"}`, http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
 
 	// Запуск сервера
 	log.Println("Сервер запущен на http://localhost:8080")
