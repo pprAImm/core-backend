@@ -14,6 +14,8 @@ import (
 	"github.com/pprAImm/core-backend/internal/api"
 	"github.com/pprAImm/database"
 	"github.com/pprAImm/database/store"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {
@@ -87,10 +89,14 @@ func main() {
 			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
 			return
 		}
+		if body.Username == "" {
+			http.Error(w, `{"error":"Имя не может быть пустым"}`, http.StatusBadRequest)
+			return
+		}
 
-		user, err := server.UpdateUsername(r.Context(), userID, body.Username)
+		user, err := storeInstance.UpdateUsername(r.Context(), userID, body.Username)
 		if err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Не удалось обновить имя"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -117,9 +123,33 @@ func main() {
 			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
 			return
 		}
+		if body.NewPassword == "" {
+			http.Error(w, `{"error":"Новый пароль не может быть пустым"}`, http.StatusBadRequest)
+			return
+		}
 
-		if err := server.UpdatePassword(r.Context(), userID, body.CurrentPassword, body.NewPassword); err != nil {
-			http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusBadRequest)
+		// Получаем текущий хеш пароля
+		user, err := storeInstance.GetUserByIDWithPassword(r.Context(), userID)
+		if err != nil {
+			http.Error(w, `{"error":"Пользователь не найден"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Проверяем текущий пароль
+		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)); err != nil {
+			http.Error(w, `{"error":"Неверный текущий пароль"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Хешируем новый пароль
+		hashed, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
+			return
+		}
+
+		if err := storeInstance.UpdatePassword(r.Context(), userID, string(hashed)); err != nil {
+			http.Error(w, `{"error":"Не удалось обновить пароль"}`, http.StatusBadRequest)
 			return
 		}
 
