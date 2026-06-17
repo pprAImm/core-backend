@@ -383,6 +383,51 @@ func main() {
 		})
 	})
 
+	// DELETE /series/{id} — удаление сериала (только владелец)
+	r.Delete("/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID сериала"}`, http.StatusBadRequest)
+			return
+		}
+
+		existing, err := storeInstance.GetSeriesByID(r.Context(), seriesID)
+		if err != nil {
+			http.Error(w, `{"error":"Сериал не найден"}`, http.StatusNotFound)
+			return
+		}
+		if existing.UploadedBy == nil || *existing.UploadedBy != userID {
+			http.Error(w, `{"error":"Нет прав на удаление"}`, http.StatusForbidden)
+			return
+		}
+
+		// Удаляем связанные записи (каскад вручную)
+		if _, err := pool.Exec(r.Context(), `DELETE FROM comments WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete comments: %v", err)
+		}
+		if _, err := pool.Exec(r.Context(), `DELETE FROM ratings WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete ratings: %v", err)
+		}
+		if _, err := pool.Exec(r.Context(), `DELETE FROM episodes WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete episodes: %v", err)
+		}
+
+		if _, err := storeInstance.DeleteSeries(r.Context(), seriesID); err != nil {
+			log.Printf("delete series: %v", err)
+			http.Error(w, `{"error":"Не удалось удалить сериал"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
 	// DELETE /episodes/{id} — удаление эпизода (только владелец сериала)
 	r.Delete("/episodes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
