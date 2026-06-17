@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 	openapi_types "github.com/oapi-codegen/runtime/types"
+	"github.com/pprAImm/database/internal/db"
 	"github.com/pprAImm/database/store"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -441,6 +442,55 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 	}
 
 	return apiResults, nil
+}
+
+// ==================== ЭНДПОЙНТЫ ПРОФИЛЯ ====================
+
+// UpdateUsername обрабатывает PUT /auth/me/username — смена имени пользователя
+func (s *Server) UpdateUsername(ctx context.Context, userID int64, newUsername string) (db.UpdateUsernameRow, error) {
+	log.Printf("PUT /auth/me/username: userID=%d, newUsername=%s", userID, newUsername)
+
+	if newUsername == "" {
+		return db.UpdateUsernameRow{}, fmt.Errorf("имя не может быть пустым")
+	}
+
+	user, err := s.Store.UpdateUsername(ctx, userID, newUsername)
+	if err != nil {
+		log.Printf("UpdateUsername error: %v", err)
+		return db.UpdateUsernameRow{}, fmt.Errorf("не удалось обновить имя")
+	}
+
+	return user, nil
+}
+
+// UpdatePassword обрабатывает PUT /auth/me/password — смена пароля
+func (s *Server) UpdatePassword(ctx context.Context, userID int64, currentPassword, newPassword string) error {
+	log.Printf("PUT /auth/me/password: userID=%d", userID)
+
+	// Получаем текущий хеш пароля
+	user, err := s.Store.GetUserByIDWithPassword(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("пользователь не найден")
+	}
+
+	// Проверяем текущий пароль
+	if !checkPasswordHash(currentPassword, user.PasswordHash) {
+		return fmt.Errorf("неверный текущий пароль")
+	}
+
+	// Хешируем новый пароль
+	hashedPassword, err := hashPassword(newPassword)
+	if err != nil {
+		return fmt.Errorf("внутренняя ошибка сервера")
+	}
+
+	// Сохраняем
+	err = s.Store.UpdatePassword(ctx, userID, hashedPassword)
+	if err != nil {
+		return fmt.Errorf("не удалось обновить пароль")
+	}
+
+	return nil
 }
 
 // ==================== ЭНДПОЙНТЫ КОММЕНТАРИЕВ ====================
