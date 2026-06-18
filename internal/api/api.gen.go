@@ -758,19 +758,29 @@ type RegisterResponseObject interface {
 	VisitRegisterResponse(w http.ResponseWriter) error
 }
 
+type Register201ResponseHeaders struct {
+	SetCookie *string
+}
+
 type Register201JSONResponse struct {
-	Email    openapi_types.Email `json:"email"`
-	Id       int                 `json:"id"`
-	Username string              `json:"username"`
+	Body struct {
+		Email    openapi_types.Email `json:"email"`
+		Id       int                 `json:"id"`
+		Username string              `json:"username"`
+	}
+	Headers Register201ResponseHeaders
 }
 
 func (response Register201JSONResponse) VisitRegisterResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
 		return err
 	}
 	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.SetCookie != nil {
+		w.Header().Set("Set-Cookie", fmt.Sprint(*response.Headers.SetCookie))
+	}
 	w.WriteHeader(201)
 	_, err := buf.WriteTo(w)
 	return err
