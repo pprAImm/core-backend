@@ -25,6 +25,8 @@ paths:
     $ref: paths/auth_login.yaml
   /auth/logout:
     $ref: paths/auth_logout.yaml
+  /auth/verify:
+    $ref: paths/auth_verify.yaml
   /auth/me:    
     $ref: paths/auth_me.yaml
   /series/{id}/rating:
