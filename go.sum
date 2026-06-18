@@ -28,8 +28,8 @@ github.com/oapi-codegen/runtime v1.4.1 h1:9nwLoI+KrWxzbBcp0jO/R8uXqbik/HUyCvPeU6
 github.com/oapi-codegen/runtime v1.4.1/go.mod h1:GwV7hC2hviaMzj+ITfHVRESK5J2W/GefVwIND/bMGvU=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/pprAImm/database v0.0.2 h1:T5RxZOGYVhGMFXbJ8knJQ2f6zLksU4DJ+3VZxiXulTo=
-github.com/pprAImm/database v0.0.2/go.mod h1:2C6hAq9/6T2beQmui0VqdcijCgCvgH4C7MeTOBztmDs=
+github.com/pprAImm/database v0.0.3 h1:aUPTrleMxmzdOZVo5Vn3PNh4R8p3gMKQfs00rJ6aTYY=
+github.com/pprAImm/database v0.0.3/go.mod h1:2C6hAq9/6T2beQmui0VqdcijCgCvgH4C7MeTOBztmDs=
 github.com/spkg/bom v0.0.0-20160624110644-59b7046e48ad/go.mod h1:qLr4V1qq6nMqFKkMo8ZTx3f+BZEkzsRUY10Xsm2mwU0=
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
