@@ -8,9 +8,11 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/oapi-codegen/runtime v1.4.1
-	github.com/pprAImm/database v0.0.2
+	github.com/pprAImm/database v0.0.3
 	golang.org/x/crypto v0.53.0
 )
+
+replace github.com/pprAImm/database => ../database
 
 require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
