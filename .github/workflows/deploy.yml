@@ -1,8 +1,8 @@
-name: Deploy Core Backend
+name: Deploy Core-Backend
 
 on:
   push:
-    branches: [main, feature/backend2, feature/finalbackend]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

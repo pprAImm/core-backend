@@ -6,22 +6,27 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	openapi_types "github.com/oapi-codegen/runtime/types"
+	"github.com/pprAImm/core-backend/internal/mailer"
 	"github.com/pprAImm/database/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Server - основная структура сервера, содержащая все обработчики API
 type Server struct {
-	Store store.Store // слой доступа к базе данных
+	Store  store.Store
+	Mailer *mailer.Mailer
+	Pool   *pgxpool.Pool // слой доступа к базе данных
 }
 
 // NewServer создаёт новый экземпляр сервера с переданным хранилищем
-func NewServer(s store.Store) *Server {
-	return &Server{Store: s}
+func NewServer(s store.Store, m *mailer.Mailer, p *pgxpool.Pool) *Server {
+	return &Server{Store: s, Mailer: m, Pool: p}
 }
 
 // generateSessionID генерирует случайный 32-символьный идентификатор сессии в hex-формате
@@ -69,11 +74,67 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 		return Register409JSONResponse{Error: "Пользователь с таким email уже существует"}, nil
 	}
 
-	// Возвращаем данные созданного пользователя (без пароля)
+	// Генерируем токен подтверждения email
+	verificationToken, err := generateSessionID()
+	if err != nil {
+		return Register409JSONResponse{Error: "Внутренняя ошибка сервера"}, nil
+	}
+
+	// Сохраняем токен и срок его действия (24 часа) в БД
+	if verificationToken != "" {
+		expiresAt := time.Now().Add(24 * time.Hour)
+		if _, err := s.Pool.Exec(ctx, "UPDATE users SET verification_token = $1, verification_token_expires_at = $2 WHERE id = $3", verificationToken, expiresAt, user.ID); err != nil {
+			log.Printf("Failed to save verification token: %v", err)
+		}
+	}
+
+	// Создаём сессию (как в Login), чтобы пользователь сразу был авторизован
+	sessionID, err := generateSessionID()
+	if err != nil {
+		return Register409JSONResponse{Error: "Не удалось создать сессию"}, nil
+	}
+
+	expiresAt := time.Now().Add(7 * 24 * time.Hour)
+	userID := user.ID
+	_, err = s.Store.CreateSession(ctx, sessionID, &userID, expiresAt)
+	if err != nil {
+		return Register409JSONResponse{Error: "Не удалось создать сессию"}, nil
+	}
+
+	// Устанавливаем HttpOnly cookie для хранения ID сессии
+	setCookie := "session_id=" + sessionID + "; HttpOnly; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
+
+	// Отправляем письмо с подтверждением (если SMTP настроен)
+	if s.Mailer != nil && s.Mailer.IsConfigured() {
+		verifyURL := os.Getenv("VERIFY_BASE_URL")
+		if verifyURL == "" {
+			verifyURL = "http://localhost:3000"
+		}
+		go func() {
+			if err := s.Mailer.SendVerificationEmail(user.Email, user.Username, verificationToken, verifyURL); err != nil {
+				log.Printf("Ошибка отправки письма подтверждения для %s: %v", user.Email, err)
+			} else {
+				log.Printf("Письмо подтверждения отправлено на %s", user.Email)
+			}
+		}()
+	} else {
+		log.Printf("SMTP не настроен, письмо подтверждения не отправлено для %s", user.Email)
+	}
+
+	// Возвращаем данные созданного пользователя (без пароля) и cookie с сессией
 	return Register201JSONResponse{
-		Email:    openapi_types.Email(user.Email),
-		Id:       int(user.ID),
-		Username: user.Username,
+		Body: struct {
+			Email    openapi_types.Email `json:"email"`
+			Id       int                 `json:"id"`
+			Username string              `json:"username"`
+		}{
+			Email:    openapi_types.Email(user.Email),
+			Id:       int(user.ID),
+			Username: user.Username,
+		},
+		Headers: Register201ResponseHeaders{
+			SetCookie: &setCookie,
+		},
 	}, nil
 }
 
@@ -91,6 +152,12 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 	// Проверяем пароль (сравниваем введённый с хешем из БД)
 	if !checkPasswordHash(request.Body.Password, user.PasswordHash) {
 		return Login401JSONResponse{Error: "Неверный email или пароль"}, nil
+	}
+
+	// Проверяем, подтверждён ли email
+	var emailVerified bool
+	if err := s.Pool.QueryRow(ctx, "SELECT email_verified FROM users WHERE id = $1", user.ID).Scan(&emailVerified); err == nil && !emailVerified {
+		return Login401JSONResponse{Error: "Email не подтверждён. Проверьте почту или запросите новое письмо"}, nil
 	}
 
 	// Генерируем уникальный ID для сессии
@@ -593,3 +660,60 @@ func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject
 		Average:  float32(avg),
 	}, nil
 }
+// ==================== EMAIL VERIFICATION ====================
+
+// VerifyEmail обрабатывает GET /auth/verify — подтверждение email по токену
+func (s *Server) VerifyEmail(ctx context.Context, request VerifyEmailRequestObject) (VerifyEmailResponseObject, error) {
+	token := request.Params.Token
+
+	var id int64
+	var emailVerified bool
+	var username string
+	var expiresAt *time.Time
+	err := s.Pool.QueryRow(ctx,
+		"SELECT id, email_verified, username, verification_token_expires_at FROM users WHERE verification_token = $1", token,
+	).Scan(&id, &emailVerified, &username, &expiresAt)
+	if err != nil {
+		return VerifyEmail400JSONResponse{Error: "Неверный или просроченный токен"}, nil
+	}
+
+	if emailVerified {
+		status := "already_verified"
+		return VerifyEmail200JSONResponse{Status: &status}, nil
+	}
+
+	// Проверка срока действия токена
+	if expiresAt != nil && time.Now().After(*expiresAt) {
+		// Удаляем пользователя и все связанные данные
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup sessions error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM comments WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup comments error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM ratings WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup ratings error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM watch_progress WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup watch_progress error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id); err != nil {
+			log.Printf("VerifyEmail: delete user error: %v", err)
+		}
+		log.Printf("VerifyEmail: user %s deleted due to expired token", username)
+		return VerifyEmail400JSONResponse{Error: "Срок подтверждения истёк. Зарегистрируйтесь заново"}, nil
+	}
+
+	_, err = s.Pool.Exec(ctx,
+		"UPDATE users SET email_verified = true, verification_token = NULL, verification_token_expires_at = NULL WHERE verification_token = $1", token,
+	)
+	if err != nil {
+		log.Printf("VerifyEmail: verify error: %v", err)
+		return VerifyEmail400JSONResponse{Error: "Не удалось подтвердить email"}, nil
+	}
+
+	log.Printf("VerifyEmail: email confirmed for user %s", username)
+	status := "verified"
+	return VerifyEmail200JSONResponse{Status: &status}, nil
+}
+
