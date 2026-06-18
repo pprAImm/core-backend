@@ -20,8 +20,6 @@ import (
 	"github.com/pprAImm/database/store"
 
 	"golang.org/x/crypto/bcrypt"
-
-	"golang.org/x/crypto/bcrypt"
 )
 
 func main() {

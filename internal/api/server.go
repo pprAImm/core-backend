@@ -102,7 +102,8 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 	}
 
 	// Устанавливаем HttpOnly cookie для хранения ID сессии
-	setCookie := "session_id=" + sessionID + "; HttpOnly; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
+	// Secure — только по HTTPS (через Caddy); SameSite=Lax — защита от CSRF
+	setCookie := "session_id=" + sessionID + "; HttpOnly; Secure; SameSite=Lax; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
 
 	// Отправляем письмо с подтверждением (если SMTP настроен)
 	if s.Mailer != nil && s.Mailer.IsConfigured() {
@@ -176,8 +177,9 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 
 	// Устанавливаем HTTP-only cookie для хранения ID сессии
 	// HttpOnly - защита от XSS атак (JavaScript не может прочитать cookie)
+	// Secure — только по HTTPS (через Caddy); SameSite=Lax — защита от CSRF
 	// Path=/ - cookie действует на всём сайте
-	setCookie := "session_id=" + sessionID + "; HttpOnly; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
+	setCookie := "session_id=" + sessionID + "; HttpOnly; Secure; SameSite=Lax; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
 
 	// Возвращаем данные пользователя и cookie
 	return Login200JSONResponse{
