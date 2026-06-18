@@ -1,0 +1,32 @@
+get:
+  operationId: verifyEmail
+  summary: Подтверждение email по токену
+  description: |
+    Подтверждает email пользователя по токену, отправленному на почту.
+    При успехе перенаправляет на страницу входа с сообщением об успехе.
+  parameters:
+    - in: query
+      name: token
+      required: true
+      schema:
+        type: string
+      description: Токен подтверждения email
+  responses:
+    "200":
+      description: Email подтверждён
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: verified
+    "400":
+      description: Неверный или просроченный токен
+      content:
+        application/json:
+          schema:
+            $ref: ../components/schemas/Error.yaml
+  tags:
+    - Авторизация

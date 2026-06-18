@@ -6,22 +6,27 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	openapi_types "github.com/oapi-codegen/runtime/types"
+	"github.com/pprAImm/core-backend/internal/mailer"
 	"github.com/pprAImm/database/store"
 	"golang.org/x/crypto/bcrypt"
 )
 
 // Server - основная структура сервера, содержащая все обработчики API
 type Server struct {
-	Store store.Store // слой доступа к базе данных
+	Store  store.Store
+	Mailer *mailer.Mailer
+	Pool   *pgxpool.Pool // слой доступа к базе данных
 }
 
 // NewServer создаёт новый экземпляр сервера с переданным хранилищем
-func NewServer(s store.Store) *Server {
-	return &Server{Store: s}
+func NewServer(s store.Store, m *mailer.Mailer, p *pgxpool.Pool) *Server {
+	return &Server{Store: s, Mailer: m, Pool: p}
 }
 
 // generateSessionID генерирует случайный 32-символьный идентификатор сессии в hex-формате
@@ -69,6 +74,19 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 		return Register409JSONResponse{Error: "Пользователь с таким email уже существует"}, nil
 	}
 
+	// Генерируем токен подтверждения email
+	verificationToken, err := generateSessionID()
+	if err != nil {
+		return Register409JSONResponse{Error: "Внутренняя ошибка сервера"}, nil
+	}
+
+	// Сохраняем токен в БД
+	if verificationToken != "" {
+		if _, err := s.Pool.Exec(ctx, "UPDATE users SET verification_token = $1 WHERE id = $2", verificationToken, user.ID); err != nil {
+			log.Printf("Failed to save verification token: %v", err)
+		}
+	}
+
 	// Создаём сессию (как в Login), чтобы пользователь сразу был авторизован
 	sessionID, err := generateSessionID()
 	if err != nil {
@@ -84,6 +102,23 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 
 	// Устанавливаем HttpOnly cookie для хранения ID сессии
 	setCookie := "session_id=" + sessionID + "; HttpOnly; Path=/; Expires=" + expiresAt.Format(time.RFC1123)
+
+	// Отправляем письмо с подтверждением (если SMTP настроен)
+	if s.Mailer != nil && s.Mailer.IsConfigured() {
+		verifyURL := os.Getenv("VERIFY_BASE_URL")
+		if verifyURL == "" {
+			verifyURL = "http://localhost:3000"
+		}
+		go func() {
+			if err := s.Mailer.SendVerificationEmail(user.Email, user.Username, verificationToken, verifyURL); err != nil {
+				log.Printf("Ошибка отправки письма подтверждения для %s: %v", user.Email, err)
+			} else {
+				log.Printf("Письмо подтверждения отправлено на %s", user.Email)
+			}
+		}()
+	} else {
+		log.Printf("SMTP не настроен, письмо подтверждения не отправлено для %s", user.Email)
+	}
 
 	// Возвращаем данные созданного пользователя (без пароля) и cookie с сессией
 	return Register201JSONResponse{

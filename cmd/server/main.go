@@ -1,15 +1,16 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/pprAImm/core-backend/internal/api"
+	"github.com/pprAImm/core-backend/internal/mailer"
 	"github.com/pprAImm/database"
 	"github.com/pprAImm/database/store"
 
@@ -52,8 +54,15 @@ func main() {
 
 	queries := database.NewQueries(pool)
 	storeInstance := store.NewStore(queries)
+	mailerInstance := mailer.NewFromEnv()
 
-	server := api.NewServer(storeInstance)
+	if mailerInstance.IsConfigured() {
+		log.Printf("SMTP сконфигурирован: %s:%s", os.Getenv("SMTP_HOST"), os.Getenv("SMTP_PORT"))
+	} else {
+		log.Println("SMTP не сконфигурирован — письма подтверждения не будут отправляться")
+	}
+
+	server := api.NewServer(storeInstance, mailerInstance, pool)
 	strictHandler := api.NewStrictHandler(server, nil)
 
 	r := chi.NewRouter()
@@ -189,35 +198,24 @@ func main() {
 			return
 		}
 
-		// Сохраняем обложку
+		// Сохраняем обложку в БД как base64 data URL
 		var coverURL *string
 		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
 			defer coverFile.Close()
-			coverDir := "./uploads/covers"
-			if err := os.MkdirAll(coverDir, 0755); err != nil {
-				log.Printf("create cover dir: %v", err)
-				http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
-				return
-			}
-			ext := filepath.Ext(coverHeader.Filename)
-			coverFilename := fmt.Sprintf("cover_%d%s", userID, ext)
-			dst, err := os.Create(filepath.Join(coverDir, coverFilename))
+			coverBytes, err := io.ReadAll(coverFile)
 			if err != nil {
-				log.Printf("create cover file: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			defer dst.Close()
-			if _, err := io.Copy(dst, coverFile); err != nil {
-				log.Printf("copy cover: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
-				return
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
 			}
-			url := "/uploads/covers/" + coverFilename
-			coverURL = &url
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
 		} else {
-			// Если файла нет, пробуем cover_url из формы
 			if urlStr := r.FormValue("cover_url"); urlStr != "" {
 				coverURL = &urlStr
 			}
@@ -268,16 +266,6 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	})
-
-	// GET /uploads/* — раздача загруженных файлов (обложек)
-	r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
-		filePath := strings.TrimPrefix(r.URL.Path, "/")
-		if filePath == "" || filePath == "uploads/" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.ServeFile(w, r, filePath)
 	})
 
 	// PUT /series/{id} — обновление сериала (multipart, обложка опциональна)
@@ -331,33 +319,23 @@ func main() {
 			}
 		}
 
-		// Обложка — если загружен новый файл, сохраняем; иначе оставляем старую
+		// Обложка — если загружен новый файл, сохраняем как base64 data URL
 		var coverURL *string
 		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
 			defer coverFile.Close()
-			coverDir := "./uploads/covers"
-			if err := os.MkdirAll(coverDir, 0755); err != nil {
-				log.Printf("create cover dir: %v", err)
-				http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
-				return
-			}
-			ext := filepath.Ext(coverHeader.Filename)
-			coverFilename := fmt.Sprintf("cover_%d_%d%s", userID, seriesID, ext)
-			dst, err := os.Create(filepath.Join(coverDir, coverFilename))
+			coverBytes, err := io.ReadAll(coverFile)
 			if err != nil {
-				log.Printf("create cover file: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			defer dst.Close()
-			if _, err := io.Copy(dst, coverFile); err != nil {
-				log.Printf("copy cover: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
-				return
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
 			}
-			url := "/uploads/covers/" + coverFilename
-			coverURL = &url
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
 		} else {
 			coverURL = existing.CoverUrl
 		}
@@ -471,6 +449,50 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// GET /api/auth/verify — подтверждение email по токену
+	r.Get("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Токен не указан"})
+			return
+		}
+
+		var emailVerified bool
+		var username string
+		err := pool.QueryRow(r.Context(),
+			"SELECT email_verified, username FROM users WHERE verification_token = $1", token,
+		).Scan(&emailVerified, &username)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Неверный или просроченный токен"})
+			return
+		}
+
+		if emailVerified {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "already_verified"})
+			return
+		}
+
+		_, err = pool.Exec(r.Context(),
+			"UPDATE users SET email_verified = true, verification_token = NULL WHERE verification_token = $1", token,
+		)
+		if err != nil {
+			log.Printf("VerifyEmail: verify error: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(500)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось подтвердить email"})
+			return
+		}
+
+		log.Printf("VerifyEmail: email confirmed for user %s", username)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "verified"})
 	})
 
 	log.Println("Сервер запущен на http://localhost:8080")
