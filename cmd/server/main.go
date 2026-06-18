@@ -79,13 +79,13 @@ func main() {
 	r.Get("/series/popular", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := pool.Query(r.Context(), `
 			SELECT s.id, s.title, s.description, s.cover_url,
-			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 as average_rating,
 			       COUNT(r.id)::bigint as vote_count
 			FROM series s
 			LEFT JOIN ratings r ON r.series_id = s.id
 			GROUP BY s.id
 			ORDER BY
-			  (COALESCE(AVG(r.rating), 0)::float8 * COUNT(r.id)::float8)
+			  (ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 * COUNT(r.id)::float8)
 			  / (COUNT(r.id)::float8 + 10) DESC
 			LIMIT 16
 		`)
@@ -123,7 +123,7 @@ func main() {
 	r.Get("/series/new", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := pool.Query(r.Context(), `
 			SELECT s.id, s.title, s.description, s.cover_url,
-			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 as average_rating,
 			       COUNT(r.id)::bigint as vote_count
 			FROM series s
 			LEFT JOIN ratings r ON r.series_id = s.id
