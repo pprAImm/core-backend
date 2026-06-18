@@ -100,7 +100,8 @@ func main() {
 		result := []map[string]interface{}{}
 		for rows.Next() {
 			var id, voteCount int64
-			var title, description, coverUrl string
+			var title string
+			var description, coverUrl *string
 			var averageRating float64
 			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
 				log.Printf("scan popular: %v", err)
@@ -141,7 +142,8 @@ func main() {
 		result := []map[string]interface{}{}
 		for rows.Next() {
 			var id, voteCount int64
-			var title, description, coverUrl string
+			var title string
+			var description, coverUrl *string
 			var averageRating float64
 			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
 				log.Printf("scan new series: %v", err)
