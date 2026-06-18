@@ -80,9 +80,10 @@ func (s *Server) Register(ctx context.Context, request RegisterRequestObject) (R
 		return Register409JSONResponse{Error: "Внутренняя ошибка сервера"}, nil
 	}
 
-	// Сохраняем токен в БД
+	// Сохраняем токен и срок его действия (24 часа) в БД
 	if verificationToken != "" {
-		if _, err := s.Pool.Exec(ctx, "UPDATE users SET verification_token = $1 WHERE id = $2", verificationToken, user.ID); err != nil {
+		expiresAt := time.Now().Add(24 * time.Hour)
+		if _, err := s.Pool.Exec(ctx, "UPDATE users SET verification_token = $1, verification_token_expires_at = $2 WHERE id = $3", verificationToken, expiresAt, user.ID); err != nil {
 			log.Printf("Failed to save verification token: %v", err)
 		}
 	}
@@ -151,6 +152,12 @@ func (s *Server) Login(ctx context.Context, request LoginRequestObject) (LoginRe
 	// Проверяем пароль (сравниваем введённый с хешем из БД)
 	if !checkPasswordHash(request.Body.Password, user.PasswordHash) {
 		return Login401JSONResponse{Error: "Неверный email или пароль"}, nil
+	}
+
+	// Проверяем, подтверждён ли email
+	var emailVerified bool
+	if err := s.Pool.QueryRow(ctx, "SELECT email_verified FROM users WHERE id = $1", user.ID).Scan(&emailVerified); err == nil && !emailVerified {
+		return Login401JSONResponse{Error: "Email не подтверждён. Проверьте почту или запросите новое письмо"}, nil
 	}
 
 	// Генерируем уникальный ID для сессии
@@ -659,11 +666,13 @@ func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject
 func (s *Server) VerifyEmail(ctx context.Context, request VerifyEmailRequestObject) (VerifyEmailResponseObject, error) {
 	token := request.Params.Token
 
+	var id int64
 	var emailVerified bool
 	var username string
+	var expiresAt *time.Time
 	err := s.Pool.QueryRow(ctx,
-		"SELECT email_verified, username FROM users WHERE verification_token = $1", token,
-	).Scan(&emailVerified, &username)
+		"SELECT id, email_verified, username, verification_token_expires_at FROM users WHERE verification_token = $1", token,
+	).Scan(&id, &emailVerified, &username, &expiresAt)
 	if err != nil {
 		return VerifyEmail400JSONResponse{Error: "Неверный или просроченный токен"}, nil
 	}
@@ -673,8 +682,30 @@ func (s *Server) VerifyEmail(ctx context.Context, request VerifyEmailRequestObje
 		return VerifyEmail200JSONResponse{Status: &status}, nil
 	}
 
+	// Проверка срока действия токена
+	if expiresAt != nil && time.Now().After(*expiresAt) {
+		// Удаляем пользователя и все связанные данные
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM sessions WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup sessions error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM comments WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup comments error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM ratings WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup ratings error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM watch_progress WHERE user_id = $1", id); err != nil {
+			log.Printf("VerifyEmail: cleanup watch_progress error: %v", err)
+		}
+		if _, err := s.Pool.Exec(ctx, "DELETE FROM users WHERE id = $1", id); err != nil {
+			log.Printf("VerifyEmail: delete user error: %v", err)
+		}
+		log.Printf("VerifyEmail: user %s deleted due to expired token", username)
+		return VerifyEmail400JSONResponse{Error: "Срок подтверждения истёк. Зарегистрируйтесь заново"}, nil
+	}
+
 	_, err = s.Pool.Exec(ctx,
-		"UPDATE users SET email_verified = true, verification_token = NULL WHERE verification_token = $1", token,
+		"UPDATE users SET email_verified = true, verification_token = NULL, verification_token_expires_at = NULL WHERE verification_token = $1", token,
 	)
 	if err != nil {
 		log.Printf("VerifyEmail: verify error: %v", err)
@@ -685,3 +716,4 @@ func (s *Server) VerifyEmail(ctx context.Context, request VerifyEmailRequestObje
 	status := "verified"
 	return VerifyEmail200JSONResponse{Status: &status}, nil
 }
+

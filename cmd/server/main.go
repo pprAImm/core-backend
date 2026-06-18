@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -159,6 +162,67 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
+	})
+
+	// POST /auth/verify/resend — повторная отправка письма подтверждения
+	r.Post("/auth/verify/resend", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email string `json:"email"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Укажите email"})
+			return
+		}
+
+		user, err := storeInstance.GetUserByEmail(r.Context(), body.Email)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Пользователь с таким email не найден"})
+			return
+		}
+
+		var emailVerified bool
+		if err := pool.QueryRow(r.Context(), "SELECT email_verified FROM users WHERE id = $1", user.ID).Scan(&emailVerified); err == nil && emailVerified {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Email уже подтверждён"})
+			return
+		}
+
+		tokenBytes := make([]byte, 16)
+		if _, err := rand.Read(tokenBytes); err != nil {
+			http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
+			return
+		}
+		verificationToken := hex.EncodeToString(tokenBytes)
+
+		tokenExpiresAt := time.Now().Add(24 * time.Hour)
+		if _, err := pool.Exec(r.Context(), "UPDATE users SET verification_token = $1, verification_token_expires_at = $2 WHERE id = $3", verificationToken, tokenExpiresAt, user.ID); err != nil {
+			log.Printf("ResendVerification: failed to save token: %v", err)
+			http.Error(w, `{"error":"Не удалось создать токен"}`, http.StatusInternalServerError)
+			return
+		}
+
+		if mailerInstance != nil && mailerInstance.IsConfigured() {
+			verifyURL := os.Getenv("VERIFY_BASE_URL")
+			if verifyURL == "" {
+				verifyURL = "http://localhost:3000"
+			}
+			go func() {
+				if err := mailerInstance.SendVerificationEmail(user.Email, user.Username, verificationToken, verifyURL); err != nil {
+					log.Printf("Ошибка отправки письма подтверждения для %s: %v", user.Email, err)
+				} else {
+					log.Printf("Письмо подтверждения отправлено на %s", user.Email)
+				}
+			}()
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		} else {
+			http.Error(w, `{"error":"SMTP не настроен"}`, http.StatusInternalServerError)
+		}
 	})
 
 	handler := api.AuthMiddleware(storeInstance)(r)
