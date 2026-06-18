@@ -129,7 +129,6 @@ func main() {
 			LEFT JOIN ratings r ON r.series_id = s.id
 			GROUP BY s.id
 			ORDER BY s.id DESC
-			LIMIT 16
 		`)
 		if err != nil {
 			log.Printf("ListNewSeries: %v", err)
