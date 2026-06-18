@@ -18,6 +18,7 @@ import (
 	"github.com/joho/godotenv"
 
 	"github.com/pprAImm/core-backend/internal/api"
+	"github.com/pprAImm/core-backend/internal/mailer"
 	"github.com/pprAImm/database"
 	"github.com/pprAImm/database/store"
 
@@ -53,8 +54,15 @@ func main() {
 
 	queries := database.NewQueries(pool)
 	storeInstance := store.NewStore(queries)
+	mailerInstance := mailer.NewFromEnv()
 
-	server := api.NewServer(storeInstance)
+	if mailerInstance.IsConfigured() {
+		log.Printf("SMTP сконфигурирован: %s:%s", os.Getenv("SMTP_HOST"), os.Getenv("SMTP_PORT"))
+	} else {
+		log.Println("SMTP не сконфигурирован — письма подтверждения не будут отправляться")
+	}
+
+	server := api.NewServer(storeInstance, mailerInstance, pool)
 	strictHandler := api.NewStrictHandler(server, nil)
 
 	r := chi.NewRouter()

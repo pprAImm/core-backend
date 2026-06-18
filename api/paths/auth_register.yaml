@@ -26,6 +26,11 @@ post:
   responses:
     "201":
       description: Пользователь создан
+      headers:
+        Set-Cookie:
+          schema:
+            type: string
+            example: session_id=abc123xyz; HttpOnly; Path=/
       content:
         application/json:
           schema:
