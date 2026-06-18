@@ -77,7 +77,18 @@ func main() {
 
 	// Popular & new series endpoints (must be before /series/{id})
 	r.Get("/series/popular", func(w http.ResponseWriter, r *http.Request) {
-		series, err := storeInstance.ListPopularSeries(r.Context(), 16)
+		rows, err := pool.Query(r.Context(), `
+			SELECT s.id, s.title, s.description, s.cover_url,
+			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       COUNT(r.id)::bigint as vote_count
+			FROM series s
+			LEFT JOIN ratings r ON r.series_id = s.id
+			GROUP BY s.id
+			ORDER BY
+			  (COALESCE(AVG(r.rating), 0)::float8 * COUNT(r.id)::float8)
+			  / (COUNT(r.id)::float8 + 10) DESC
+			LIMIT 16
+		`)
 		if err != nil {
 			log.Printf("ListPopularSeries: %v", err)
 			w.Header().Set("Content-Type", "application/json")
@@ -85,23 +96,40 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось загрузить популярные сериалы"})
 			return
 		}
-		result := make([]map[string]interface{}, len(series))
-		for i, s := range series {
-			result[i] = map[string]interface{}{
-				"id":             s.ID,
-				"title":          s.Title,
-				"description":    s.Description,
-				"cover_url":      s.CoverUrl,
-				"average_rating": s.AverageRating,
-				"vote_count":     s.VoteCount,
+		defer rows.Close()
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var id, voteCount int64
+			var title, description, coverUrl string
+			var averageRating float64
+			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
+				log.Printf("scan popular: %v", err)
+				continue
 			}
+			result = append(result, map[string]interface{}{
+				"id":             id,
+				"title":          title,
+				"description":    description,
+				"cover_url":      coverUrl,
+				"average_rating": averageRating,
+				"vote_count":     voteCount,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
 	})
 
 	r.Get("/series/new", func(w http.ResponseWriter, r *http.Request) {
-		series, err := storeInstance.ListNewSeries(r.Context(), 16)
+		rows, err := pool.Query(r.Context(), `
+			SELECT s.id, s.title, s.description, s.cover_url,
+			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       COUNT(r.id)::bigint as vote_count
+			FROM series s
+			LEFT JOIN ratings r ON r.series_id = s.id
+			GROUP BY s.id
+			ORDER BY s.id DESC
+			LIMIT 16
+		`)
 		if err != nil {
 			log.Printf("ListNewSeries: %v", err)
 			w.Header().Set("Content-Type", "application/json")
@@ -109,16 +137,24 @@ func main() {
 			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось загрузить новые сериалы"})
 			return
 		}
-		result := make([]map[string]interface{}, len(series))
-		for i, s := range series {
-			result[i] = map[string]interface{}{
-				"id":             s.ID,
-				"title":          s.Title,
-				"description":    s.Description,
-				"cover_url":      s.CoverUrl,
-				"average_rating": s.AverageRating,
-				"vote_count":     s.VoteCount,
+		defer rows.Close()
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var id, voteCount int64
+			var title, description, coverUrl string
+			var averageRating float64
+			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
+				log.Printf("scan new series: %v", err)
+				continue
 			}
+			result = append(result, map[string]interface{}{
+				"id":             id,
+				"title":          title,
+				"description":    description,
+				"cover_url":      coverUrl,
+				"average_rating": averageRating,
+				"vote_count":     voteCount,
+			})
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
