@@ -451,50 +451,6 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	// GET /api/auth/verify — подтверждение email по токену
-	r.Get("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
-		token := r.URL.Query().Get("token")
-		if token == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Токен не указан"})
-			return
-		}
-
-		var emailVerified bool
-		var username string
-		err := pool.QueryRow(r.Context(),
-			"SELECT email_verified, username FROM users WHERE verification_token = $1", token,
-		).Scan(&emailVerified, &username)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(400)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Неверный или просроченный токен"})
-			return
-		}
-
-		if emailVerified {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"status": "already_verified"})
-			return
-		}
-
-		_, err = pool.Exec(r.Context(),
-			"UPDATE users SET email_verified = true, verification_token = NULL WHERE verification_token = $1", token,
-		)
-		if err != nil {
-			log.Printf("VerifyEmail: verify error: %v", err)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(500)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось подтвердить email"})
-			return
-		}
-
-		log.Printf("VerifyEmail: email confirmed for user %s", username)
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "verified"})
-	})
-
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }

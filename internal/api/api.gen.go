@@ -37,6 +37,12 @@ type RegisterJSONBody struct {
 	Username string              `json:"username"`
 }
 
+// VerifyEmailParams defines parameters for VerifyEmail.
+type VerifyEmailParams struct {
+	// Token Токен подтверждения email
+	Token string `form:"token" json:"token"`
+}
+
 // SearchSeriesParams defines parameters for SearchSeries.
 type SearchSeriesParams struct {
 	// Q Поисковый запрос
@@ -79,6 +85,9 @@ type ServerInterface interface {
 	// Регистрация нового пользователя
 	// (POST /auth/register)
 	Register(w http.ResponseWriter, r *http.Request)
+	// Подтверждение email по токену
+	// (GET /auth/verify)
+	VerifyEmail(w http.ResponseWriter, r *http.Request, params VerifyEmailParams)
 	// Получить все категории
 	// (GET /categories)
 	GetAllCategories(w http.ResponseWriter, r *http.Request)
@@ -130,6 +139,12 @@ func (_ Unimplemented) GetCurrentUser(w http.ResponseWriter, r *http.Request) {
 // Регистрация нового пользователя
 // (POST /auth/register)
 func (_ Unimplemented) Register(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Подтверждение email по токену
+// (GET /auth/verify)
+func (_ Unimplemented) VerifyEmail(w http.ResponseWriter, r *http.Request, params VerifyEmailParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -249,6 +264,39 @@ func (siw *ServerInterfaceWrapper) Register(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.Register(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// VerifyEmail operation middleware
+func (siw *ServerInterfaceWrapper) VerifyEmail(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params VerifyEmailParams
+
+	// ------------- Required query parameter "token" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "token", r.URL.Query(), &params.Token, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "token"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "token", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.VerifyEmail(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -599,6 +647,9 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/auth/register", wrapper.Register)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/auth/verify", wrapper.VerifyEmail)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/categories", wrapper.GetAllCategories)
 	})
 	r.Group(func(r chi.Router) {
@@ -798,6 +849,46 @@ func (response Register409JSONResponse) VisitRegisterResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmailRequestObject struct {
+	Params VerifyEmailParams
+}
+
+type VerifyEmailResponseObject interface {
+	VisitVerifyEmailResponse(w http.ResponseWriter) error
+}
+
+type VerifyEmail200JSONResponse struct {
+	Status *string `json:"status,omitempty"`
+}
+
+func (response VerifyEmail200JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type VerifyEmail400JSONResponse struct {
+	Error string `json:"error"`
+}
+
+func (response VerifyEmail400JSONResponse) VisitVerifyEmailResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1221,6 +1312,9 @@ type StrictServerInterface interface {
 	// Регистрация нового пользователя
 	// (POST /auth/register)
 	Register(ctx context.Context, request RegisterRequestObject) (RegisterResponseObject, error)
+	// Подтверждение email по токену
+	// (GET /auth/verify)
+	VerifyEmail(ctx context.Context, request VerifyEmailRequestObject) (VerifyEmailResponseObject, error)
 	// Получить все категории
 	// (GET /categories)
 	GetAllCategories(ctx context.Context, request GetAllCategoriesRequestObject) (GetAllCategoriesResponseObject, error)
@@ -1379,6 +1473,32 @@ func (sh *strictHandler) Register(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RegisterResponseObject); ok {
 		if err := validResponse.VisitRegisterResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// VerifyEmail operation middleware
+func (sh *strictHandler) VerifyEmail(w http.ResponseWriter, r *http.Request, params VerifyEmailParams) {
+	var request VerifyEmailRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.VerifyEmail(ctx, request.(VerifyEmailRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "VerifyEmail")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(VerifyEmailResponseObject); ok {
+		if err := validResponse.VisitVerifyEmailResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

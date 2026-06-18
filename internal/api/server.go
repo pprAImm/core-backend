@@ -653,3 +653,35 @@ func (s *Server) RateSeries(ctx context.Context, request RateSeriesRequestObject
 		Average:  float32(avg),
 	}, nil
 }
+// ==================== EMAIL VERIFICATION ====================
+
+// VerifyEmail обрабатывает GET /auth/verify — подтверждение email по токену
+func (s *Server) VerifyEmail(ctx context.Context, request VerifyEmailRequestObject) (VerifyEmailResponseObject, error) {
+	token := request.Params.Token
+
+	var emailVerified bool
+	var username string
+	err := s.Pool.QueryRow(ctx,
+		"SELECT email_verified, username FROM users WHERE verification_token = $1", token,
+	).Scan(&emailVerified, &username)
+	if err != nil {
+		return VerifyEmail400JSONResponse{Error: "Неверный или просроченный токен"}, nil
+	}
+
+	if emailVerified {
+		status := "already_verified"
+		return VerifyEmail200JSONResponse{Status: &status}, nil
+	}
+
+	_, err = s.Pool.Exec(ctx,
+		"UPDATE users SET email_verified = true, verification_token = NULL WHERE verification_token = $1", token,
+	)
+	if err != nil {
+		log.Printf("VerifyEmail: verify error: %v", err)
+		return VerifyEmail400JSONResponse{Error: "Не удалось подтвердить email"}, nil
+	}
+
+	log.Printf("VerifyEmail: email confirmed for user %s", username)
+	status := "verified"
+	return VerifyEmail200JSONResponse{Status: &status}, nil
+}
