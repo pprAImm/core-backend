@@ -1,15 +1,16 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -189,35 +190,24 @@ func main() {
 			return
 		}
 
-		// Сохраняем обложку
+		// Сохраняем обложку в БД как base64 data URL
 		var coverURL *string
 		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
 			defer coverFile.Close()
-			coverDir := "./uploads/covers"
-			if err := os.MkdirAll(coverDir, 0755); err != nil {
-				log.Printf("create cover dir: %v", err)
-				http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
-				return
-			}
-			ext := filepath.Ext(coverHeader.Filename)
-			coverFilename := fmt.Sprintf("cover_%d%s", userID, ext)
-			dst, err := os.Create(filepath.Join(coverDir, coverFilename))
+			coverBytes, err := io.ReadAll(coverFile)
 			if err != nil {
-				log.Printf("create cover file: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			defer dst.Close()
-			if _, err := io.Copy(dst, coverFile); err != nil {
-				log.Printf("copy cover: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
-				return
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
 			}
-			url := "/uploads/covers/" + coverFilename
-			coverURL = &url
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
 		} else {
-			// Если файла нет, пробуем cover_url из формы
 			if urlStr := r.FormValue("cover_url"); urlStr != "" {
 				coverURL = &urlStr
 			}
@@ -268,16 +258,6 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	})
-
-	// GET /uploads/* — раздача загруженных файлов (обложек)
-	r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
-		filePath := strings.TrimPrefix(r.URL.Path, "/")
-		if filePath == "" || filePath == "uploads/" {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		http.ServeFile(w, r, filePath)
 	})
 
 	// PUT /series/{id} — обновление сериала (multipart, обложка опциональна)
@@ -331,33 +311,23 @@ func main() {
 			}
 		}
 
-		// Обложка — если загружен новый файл, сохраняем; иначе оставляем старую
+		// Обложка — если загружен новый файл, сохраняем как base64 data URL
 		var coverURL *string
 		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
 			defer coverFile.Close()
-			coverDir := "./uploads/covers"
-			if err := os.MkdirAll(coverDir, 0755); err != nil {
-				log.Printf("create cover dir: %v", err)
-				http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
-				return
-			}
-			ext := filepath.Ext(coverHeader.Filename)
-			coverFilename := fmt.Sprintf("cover_%d_%d%s", userID, seriesID, ext)
-			dst, err := os.Create(filepath.Join(coverDir, coverFilename))
+			coverBytes, err := io.ReadAll(coverFile)
 			if err != nil {
-				log.Printf("create cover file: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			defer dst.Close()
-			if _, err := io.Copy(dst, coverFile); err != nil {
-				log.Printf("copy cover: %v", err)
-				http.Error(w, `{"error":"Не удалось сохранить обложку"}`, http.StatusInternalServerError)
-				return
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
 			}
-			url := "/uploads/covers/" + coverFilename
-			coverURL = &url
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
 		} else {
 			coverURL = existing.CoverUrl
 		}
