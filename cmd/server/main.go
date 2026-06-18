@@ -79,13 +79,13 @@ func main() {
 	r.Get("/series/popular", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := pool.Query(r.Context(), `
 			SELECT s.id, s.title, s.description, s.cover_url,
-			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 as average_rating,
 			       COUNT(r.id)::bigint as vote_count
 			FROM series s
 			LEFT JOIN ratings r ON r.series_id = s.id
 			GROUP BY s.id
 			ORDER BY
-			  (COALESCE(AVG(r.rating), 0)::float8 * COUNT(r.id)::float8)
+			  (ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 * COUNT(r.id)::float8)
 			  / (COUNT(r.id)::float8 + 10) DESC
 			LIMIT 16
 		`)
@@ -100,7 +100,8 @@ func main() {
 		result := []map[string]interface{}{}
 		for rows.Next() {
 			var id, voteCount int64
-			var title, description, coverUrl string
+			var title string
+			var description, coverUrl *string
 			var averageRating float64
 			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
 				log.Printf("scan popular: %v", err)
@@ -122,13 +123,12 @@ func main() {
 	r.Get("/series/new", func(w http.ResponseWriter, r *http.Request) {
 		rows, err := pool.Query(r.Context(), `
 			SELECT s.id, s.title, s.description, s.cover_url,
-			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       ROUND(COALESCE(AVG(r.rating), 0)::numeric, 1)::float8 as average_rating,
 			       COUNT(r.id)::bigint as vote_count
 			FROM series s
 			LEFT JOIN ratings r ON r.series_id = s.id
 			GROUP BY s.id
 			ORDER BY s.id DESC
-			LIMIT 16
 		`)
 		if err != nil {
 			log.Printf("ListNewSeries: %v", err)
@@ -141,7 +141,8 @@ func main() {
 		result := []map[string]interface{}{}
 		for rows.Next() {
 			var id, voteCount int64
-			var title, description, coverUrl string
+			var title string
+			var description, coverUrl *string
 			var averageRating float64
 			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
 				log.Printf("scan new series: %v", err)
