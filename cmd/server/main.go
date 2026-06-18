@@ -75,6 +75,91 @@ func main() {
 		AllowCredentials: true,
 	}))
 
+	// Popular & new series endpoints (must be before /series/{id})
+	r.Get("/series/popular", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := pool.Query(r.Context(), `
+			SELECT s.id, s.title, s.description, s.cover_url,
+			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       COUNT(r.id)::bigint as vote_count
+			FROM series s
+			LEFT JOIN ratings r ON r.series_id = s.id
+			GROUP BY s.id
+			ORDER BY
+			  (COALESCE(AVG(r.rating), 0)::float8 * COUNT(r.id)::float8)
+			  / (COUNT(r.id)::float8 + 10) DESC
+			LIMIT 16
+		`)
+		if err != nil {
+			log.Printf("ListPopularSeries: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось загрузить популярные сериалы"})
+			return
+		}
+		defer rows.Close()
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var id, voteCount int64
+			var title, description, coverUrl string
+			var averageRating float64
+			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
+				log.Printf("scan popular: %v", err)
+				continue
+			}
+			result = append(result, map[string]interface{}{
+				"id":             id,
+				"title":          title,
+				"description":    description,
+				"cover_url":      coverUrl,
+				"average_rating": averageRating,
+				"vote_count":     voteCount,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
+	r.Get("/series/new", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := pool.Query(r.Context(), `
+			SELECT s.id, s.title, s.description, s.cover_url,
+			       COALESCE(AVG(r.rating), 0)::float8 as average_rating,
+			       COUNT(r.id)::bigint as vote_count
+			FROM series s
+			LEFT JOIN ratings r ON r.series_id = s.id
+			GROUP BY s.id
+			ORDER BY s.id DESC
+			LIMIT 16
+		`)
+		if err != nil {
+			log.Printf("ListNewSeries: %v", err)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Не удалось загрузить новые сериалы"})
+			return
+		}
+		defer rows.Close()
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var id, voteCount int64
+			var title, description, coverUrl string
+			var averageRating float64
+			if err := rows.Scan(&id, &title, &description, &coverUrl, &averageRating, &voteCount); err != nil {
+				log.Printf("scan new series: %v", err)
+				continue
+			}
+			result = append(result, map[string]interface{}{
+				"id":             id,
+				"title":          title,
+				"description":    description,
+				"cover_url":      coverUrl,
+				"average_rating": averageRating,
+				"vote_count":     voteCount,
+			})
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
 	handler := api.AuthMiddleware(storeInstance)(r)
 
 	api.HandlerFromMux(strictHandler, r)
@@ -449,6 +534,133 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// POST /episodes/{id}/progress — сохранить прогресс просмотра
+	r.Post("/episodes/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		episodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID эпизода"}`, http.StatusBadRequest)
+			return
+		}
+
+		var body struct {
+			ProgressSeconds float64 `json:"progress_seconds"`
+			DurationSeconds float64 `json:"duration_seconds"`
+			Completed       bool    `json:"completed"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
+			return
+		}
+
+		_, err = pool.Exec(r.Context(), `
+			INSERT INTO watch_progress (user_id, episode_id, progress_seconds, duration_seconds, completed, updated_at)
+			VALUES ($1, $2, $3, $4, $5, now())
+			ON CONFLICT (user_id, episode_id)
+			DO UPDATE SET progress_seconds = $3, duration_seconds = $4, completed = $5, updated_at = now()
+		`, userID, episodeID, body.ProgressSeconds, body.DurationSeconds, body.Completed)
+		if err != nil {
+			log.Printf("save watch progress: %v", err)
+			http.Error(w, `{"error":"Не удалось сохранить прогресс"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// GET /episodes/{id}/progress — получить прогресс по одному эпизоду
+	r.Get("/episodes/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		episodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID эпизода"}`, http.StatusBadRequest)
+			return
+		}
+
+		var progressSeconds, durationSeconds float64
+		var completed bool
+		err = pool.QueryRow(r.Context(), `
+			SELECT progress_seconds, duration_seconds, completed
+			FROM watch_progress
+			WHERE user_id = $1 AND episode_id = $2
+		`, userID, episodeID).Scan(&progressSeconds, &durationSeconds, &completed)
+
+		if err != nil {
+			progressSeconds = 0
+			durationSeconds = 0
+			completed = false
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"progress_seconds": progressSeconds,
+			"duration_seconds": durationSeconds,
+			"completed":       completed,
+		})
+	})
+
+	// GET /series/{id}/progress — получить прогресс по всем эпизодам сериала
+	r.Get("/series/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID сериала"}`, http.StatusBadRequest)
+			return
+		}
+
+		rows, err := pool.Query(r.Context(), `
+			SELECT wp.episode_id, wp.progress_seconds, wp.duration_seconds, wp.completed, wp.updated_at
+			FROM watch_progress wp
+			JOIN episodes e ON e.id = wp.episode_id
+			WHERE wp.user_id = $1 AND e.series_id = $2
+			ORDER BY e.episode_num
+		`, userID, seriesID)
+		if err != nil {
+			log.Printf("get watch progress: %v", err)
+			http.Error(w, `{"error":"Не удалось загрузить прогресс"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var episodeID int64
+			var progressSeconds, durationSeconds float64
+			var completed bool
+			var updatedAt interface{}
+			if err := rows.Scan(&episodeID, &progressSeconds, &durationSeconds, &completed, &updatedAt); err != nil {
+				log.Printf("scan watch progress: %v", err)
+				continue
+			}
+			result = append(result, map[string]interface{}{
+				"episode_id":       episodeID,
+				"progress_seconds": progressSeconds,
+				"duration_seconds": durationSeconds,
+				"completed":        completed,
+				"updated_at":       updatedAt,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
 	})
 
 	log.Println("Сервер запущен на http://localhost:8080")
