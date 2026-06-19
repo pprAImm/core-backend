@@ -306,6 +306,22 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	r.Get("/user/series", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+		series, err := storeInstance.GetSeriesByUser(r.Context(), &userID)
+		if err != nil {
+			log.Printf("GetSeriesByUser: %v", err)
+			http.Error(w, `{"error":"Не удалось загрузить сериалы"}`, http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(series)
+	})
+
 	// Запуск сервера
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))
