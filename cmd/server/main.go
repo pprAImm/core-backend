@@ -2,10 +2,13 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -222,22 +225,11 @@ func main() {
 		}
 	})
 
-	// Serve uploaded files (covers, etc.)
-	uploadDir := "./uploads"
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		log.Fatalf("Failed to create uploads directory: %v", err)
-	}
-	coverDir := filepath.Join(uploadDir, "covers")
-	if err := os.MkdirAll(coverDir, 0755); err != nil {
-		log.Fatalf("Failed to create covers directory: %v", err)
-	}
-	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
-
 	handler := api.AuthMiddleware(storeInstance)(r)
 
 	api.HandlerFromMux(strictHandler, r)
 
-	// Кастомные эндпоинты профиля (вне OpenAPI spec)
+	// Profile endpoints
 	r.Put("/auth/me/username", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
 		if !ok {
@@ -291,20 +283,17 @@ func main() {
 			return
 		}
 
-		// Получаем текущий хеш пароля
 		user, err := storeInstance.GetUserByIDWithPassword(r.Context(), userID)
 		if err != nil {
 			http.Error(w, `{"error":"Пользователь не найден"}`, http.StatusBadRequest)
 			return
 		}
 
-		// Проверяем текущий пароль
 		if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(body.CurrentPassword)); err != nil {
 			http.Error(w, `{"error":"Неверный текущий пароль"}`, http.StatusBadRequest)
 			return
 		}
 
-		// Хешируем новый пароль
 		hashed, err := bcrypt.GenerateFromPassword([]byte(body.NewPassword), bcrypt.DefaultCost)
 		if err != nil {
 			http.Error(w, `{"error":"Внутренняя ошибка сервера"}`, http.StatusInternalServerError)
@@ -320,7 +309,7 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	// POST /series — создание нового сериала
+	// POST /series — создание нового сериала (multipart)
 	r.Post("/series", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
 		if !ok {
@@ -329,7 +318,7 @@ func main() {
 		}
 
 		if err := r.ParseMultipartForm(50 << 20); err != nil {
-			http.Error(w, `{"error":"Не удалось разобрать форму"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Неверный формат данных"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -338,48 +327,59 @@ func main() {
 			http.Error(w, `{"error":"Название обязательно"}`, http.StatusBadRequest)
 			return
 		}
+
 		description := r.FormValue("description")
 
-		var categoryID *int64
-		if slugsRaw := r.FormValue("category_slugs"); slugsRaw != "" {
-			var slugs []string
-			if err := json.Unmarshal([]byte(slugsRaw), &slugs); err == nil && len(slugs) > 0 {
-				cat, err := storeInstance.GetCategoryBySlug(r.Context(), slugs[0])
-				if err == nil {
-					categoryID = &cat.ID
-				}
-			}
+		categorySlugsJSON := r.FormValue("category_slugs")
+		if categorySlugsJSON == "" {
+			http.Error(w, `{"error":"Выберите хотя бы одну категорию"}`, http.StatusBadRequest)
+			return
+		}
+		var categorySlugs []string
+		if err := json.Unmarshal([]byte(categorySlugsJSON), &categorySlugs); err != nil || len(categorySlugs) == 0 {
+			http.Error(w, `{"error":"Неверный формат категорий"}`, http.StatusBadRequest)
+			return
 		}
 
+		// Берём первую категорию для category_id (series имеет одно category_id)
+		category, err := storeInstance.GetCategoryBySlug(r.Context(), categorySlugs[0])
+		if err != nil {
+			http.Error(w, `{"error":"Категория не найдена"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Сохраняем обложку в БД как base64 data URL
 		var coverURL *string
-		file, header, err := r.FormFile("cover")
+		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
-			defer file.Close()
-			ext := filepath.Ext(header.Filename)
-			token := make([]byte, 16)
-			if _, e := rand.Read(token); e != nil {
-				http.Error(w, `{"error":"Внутренняя ошибка"}`, http.StatusInternalServerError)
+			defer coverFile.Close()
+			coverBytes, err := io.ReadAll(coverFile)
+			if err != nil {
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			filename := hex.EncodeToString(token) + ext
-			dst, err := os.Create(filepath.Join(coverDir, filename))
-			if err == nil {
-				defer dst.Close()
-				if _, err := io.Copy(dst, file); err == nil {
-					url := "/uploads/covers/" + filename
-					coverURL = &url
-				}
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
+			}
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
+		} else {
+			if urlStr := r.FormValue("cover_url"); urlStr != "" {
+				coverURL = &urlStr
 			}
 		}
 
-		descPtr := &description
-		if description == "" {
-			descPtr = nil
+		// Создаём сериал
+		var descPtr *string
+		if description != "" {
+			descPtr = &description
 		}
 
-		series, err := storeInstance.CreateSeriesWithUploader(r.Context(), title, descPtr, categoryID, coverURL, &userID)
+		series, err := storeInstance.CreateSeriesWithUploader(r.Context(), title, descPtr, &category.ID, coverURL, &userID)
 		if err != nil {
-			log.Printf("CreateSeriesWithUploader: %v", err)
+			log.Printf("create series: %v", err)
 			http.Error(w, `{"error":"Не удалось создать сериал"}`, http.StatusInternalServerError)
 			return
 		}
@@ -389,24 +389,61 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]int64{"id": series.ID})
 	})
 
-	// PUT /series/{id} — обновление сериала
+	// GET /user/series — список сериалов текущего пользователя
+	r.Get("/user/series", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		seriesList, err := storeInstance.GetSeriesByUser(r.Context(), &userID)
+		if err != nil {
+			log.Printf("get user series: %v", err)
+			http.Error(w, `{"error":"Не удалось загрузить сериалы"}`, http.StatusInternalServerError)
+			return
+		}
+
+		result := make([]map[string]interface{}, len(seriesList))
+		for i, s := range seriesList {
+			result[i] = map[string]interface{}{
+				"id":          s.ID,
+				"title":       s.Title,
+				"description": s.Description,
+				"cover_url":   s.CoverUrl,
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
+	// PUT /series/{id} — обновление сериала (multipart, обложка опциональна)
 	r.Put("/series/{id}", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
 			return
 		}
-		_ = userID
 
-		idStr := chi.URLParam(r, "id")
-		id, err := strconv.ParseInt(idStr, 10, 64)
+		seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 		if err != nil {
-			http.Error(w, `{"error":"Неверный ID"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Неверный ID сериала"}`, http.StatusBadRequest)
+			return
+		}
+
+		existing, err := storeInstance.GetSeriesByID(r.Context(), seriesID)
+		if err != nil {
+			http.Error(w, `{"error":"Сериал не найден"}`, http.StatusNotFound)
+			return
+		}
+		if existing.UploadedBy == nil || *existing.UploadedBy != userID {
+			http.Error(w, `{"error":"Нет прав на редактирование"}`, http.StatusForbidden)
 			return
 		}
 
 		if err := r.ParseMultipartForm(50 << 20); err != nil {
-			http.Error(w, `{"error":"Не удалось разобрать форму"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Неверный формат данных"}`, http.StatusBadRequest)
 			return
 		}
 
@@ -415,53 +452,103 @@ func main() {
 			http.Error(w, `{"error":"Название обязательно"}`, http.StatusBadRequest)
 			return
 		}
+
 		description := r.FormValue("description")
 
+		categorySlugsJSON := r.FormValue("category_slugs")
 		var categoryID *int64
-		if slugsRaw := r.FormValue("category_slugs"); slugsRaw != "" {
-			var slugs []string
-			if err := json.Unmarshal([]byte(slugsRaw), &slugs); err == nil && len(slugs) > 0 {
-				cat, err := storeInstance.GetCategoryBySlug(r.Context(), slugs[0])
-				if err == nil {
-					categoryID = &cat.ID
+		if categorySlugsJSON != "" {
+			var categorySlugs []string
+			if err := json.Unmarshal([]byte(categorySlugsJSON), &categorySlugs); err == nil && len(categorySlugs) > 0 {
+				category, err := storeInstance.GetCategoryBySlug(r.Context(), categorySlugs[0])
+				if err != nil {
+					http.Error(w, `{"error":"Категория не найдена"}`, http.StatusBadRequest)
+					return
 				}
+				categoryID = &category.ID
 			}
 		}
 
+		// Обложка — если загружен новый файл, сохраняем как base64 data URL
 		var coverURL *string
-		file, header, err := r.FormFile("cover")
+		coverFile, coverHeader, err := r.FormFile("cover")
 		if err == nil {
-			defer file.Close()
-			ext := filepath.Ext(header.Filename)
-			token := make([]byte, 16)
-			if _, e := rand.Read(token); e != nil {
-				http.Error(w, `{"error":"Внутренняя ошибка"}`, http.StatusInternalServerError)
+			defer coverFile.Close()
+			coverBytes, err := io.ReadAll(coverFile)
+			if err != nil {
+				log.Printf("read cover: %v", err)
+				http.Error(w, `{"error":"Не удалось прочитать обложку"}`, http.StatusInternalServerError)
 				return
 			}
-			filename := hex.EncodeToString(token) + ext
-			dst, err := os.Create(filepath.Join(coverDir, filename))
-			if err == nil {
-				defer dst.Close()
-				if _, err := io.Copy(dst, file); err == nil {
-					url := "/uploads/covers/" + filename
-					coverURL = &url
-				}
+			mimeType := mime.TypeByExtension(filepath.Ext(coverHeader.Filename))
+			if mimeType == "" {
+				mimeType = "image/jpeg"
 			}
+			dataURL := fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(coverBytes))
+			coverURL = &dataURL
 		} else {
-			existing, err := storeInstance.GetSeriesByID(r.Context(), id)
-			if err == nil {
-				coverURL = existing.CoverUrl
-			}
+			coverURL = existing.CoverUrl
 		}
 
-		descPtr := &description
-		if description == "" {
-			descPtr = nil
+		var descPtr *string
+		if description != "" {
+			descPtr = &description
 		}
 
-		if _, err := storeInstance.UpdateSeries(r.Context(), id, title, descPtr, categoryID, coverURL); err != nil {
-			log.Printf("UpdateSeries: %v", err)
+		updated, err := storeInstance.UpdateSeries(r.Context(), seriesID, title, descPtr, categoryID, coverURL)
+		if err != nil {
+			log.Printf("update series: %v", err)
 			http.Error(w, `{"error":"Не удалось обновить сериал"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":          updated.ID,
+			"title":       updated.Title,
+			"description": updated.Description,
+			"cover_url":   updated.CoverUrl,
+		})
+	})
+
+	// DELETE /series/{id} — удаление сериала (только владелец)
+	r.Delete("/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID сериала"}`, http.StatusBadRequest)
+			return
+		}
+
+		existing, err := storeInstance.GetSeriesByID(r.Context(), seriesID)
+		if err != nil {
+			http.Error(w, `{"error":"Сериал не найден"}`, http.StatusNotFound)
+			return
+		}
+		if existing.UploadedBy == nil || *existing.UploadedBy != userID {
+			http.Error(w, `{"error":"Нет прав на удаление"}`, http.StatusForbidden)
+			return
+		}
+
+		// Удаляем связанные записи (каскад вручную)
+		if _, err := pool.Exec(r.Context(), `DELETE FROM comments WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete comments: %v", err)
+		}
+		if _, err := pool.Exec(r.Context(), `DELETE FROM ratings WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete ratings: %v", err)
+		}
+		if _, err := pool.Exec(r.Context(), `DELETE FROM episodes WHERE series_id = $1`, seriesID); err != nil {
+			log.Printf("delete episodes: %v", err)
+		}
+
+		if _, err := storeInstance.DeleteSeries(r.Context(), seriesID); err != nil {
+			log.Printf("delete series: %v", err)
+			http.Error(w, `{"error":"Не удалось удалить сериал"}`, http.StatusInternalServerError)
 			return
 		}
 
@@ -469,50 +556,43 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	// GET /user/series — список сериалов текущего пользователя
-	r.Get("/user/series", func(w http.ResponseWriter, r *http.Request) {
-		userID, ok := api.GetUserIDFromContext(r.Context())
-		if !ok {
-			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
-			return
-		}
-		rows, err := storeInstance.GetSeriesByUser(r.Context(), &userID)
-		if err != nil {
-			log.Printf("GetSeriesByUser: %v", err)
-			http.Error(w, `{"error":"Не удалось загрузить сериалы"}`, http.StatusInternalServerError)
-			return
-		}
-		result := make([]map[string]interface{}, 0, len(rows))
-		for _, s := range rows {
-			result = append(result, map[string]interface{}{
-				"id":          s.ID,
-				"title":       s.Title,
-				"description": s.Description,
-				"cover_url":   s.CoverUrl,
-			})
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(result)
-	})
-
-	// DELETE /episodes/{id} — удаление эпизода
+	// DELETE /episodes/{id} — удаление эпизода (только владелец сериала)
 	r.Delete("/episodes/{id}", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
 		if !ok {
 			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
 			return
 		}
-		_ = userID
 
-		idStr := chi.URLParam(r, "id")
-		id, err := strconv.ParseInt(idStr, 10, 64)
+		episodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 		if err != nil {
-			http.Error(w, `{"error":"Неверный ID"}`, http.StatusBadRequest)
+			http.Error(w, `{"error":"Неверный ID эпизода"}`, http.StatusBadRequest)
 			return
 		}
 
-		if _, err := storeInstance.DeleteEpisode(r.Context(), id); err != nil {
-			log.Printf("DeleteEpisode: %v", err)
+		episode, err := storeInstance.GetEpisodeByID(r.Context(), episodeID)
+		if err != nil {
+			http.Error(w, `{"error":"Эпизод не найден"}`, http.StatusNotFound)
+			return
+		}
+
+		if episode.SeriesID == nil {
+			http.Error(w, `{"error":"Эпизод не привязан к сериалу"}`, http.StatusBadRequest)
+			return
+		}
+
+		series, err := storeInstance.GetSeriesByID(r.Context(), *episode.SeriesID)
+		if err != nil {
+			http.Error(w, `{"error":"Сериал не найден"}`, http.StatusNotFound)
+			return
+		}
+		if series.UploadedBy == nil || *series.UploadedBy != userID {
+			http.Error(w, `{"error":"Нет прав на удаление"}`, http.StatusForbidden)
+			return
+		}
+
+		if _, err := storeInstance.DeleteEpisode(r.Context(), episodeID); err != nil {
+			log.Printf("delete episode: %v", err)
 			http.Error(w, `{"error":"Не удалось удалить эпизод"}`, http.StatusInternalServerError)
 			return
 		}
@@ -521,7 +601,133 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	// Запуск сервера
+	// POST /episodes/{id}/progress — сохранить прогресс просмотра
+	r.Post("/episodes/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		episodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID эпизода"}`, http.StatusBadRequest)
+			return
+		}
+
+		var body struct {
+			ProgressSeconds float64 `json:"progress_seconds"`
+			DurationSeconds float64 `json:"duration_seconds"`
+			Completed       bool    `json:"completed"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"Неверный формат запроса"}`, http.StatusBadRequest)
+			return
+		}
+
+		_, err = pool.Exec(r.Context(), `
+			INSERT INTO watch_progress (user_id, episode_id, progress_seconds, duration_seconds, completed, updated_at)
+			VALUES ($1, $2, $3, $4, $5, now())
+			ON CONFLICT (user_id, episode_id)
+			DO UPDATE SET progress_seconds = $3, duration_seconds = $4, completed = $5, updated_at = now()
+		`, userID, episodeID, body.ProgressSeconds, body.DurationSeconds, body.Completed)
+		if err != nil {
+			log.Printf("save watch progress: %v", err)
+			http.Error(w, `{"error":"Не удалось сохранить прогресс"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// GET /episodes/{id}/progress — получить прогресс по одному эпизоду
+	r.Get("/episodes/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		episodeID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID эпизода"}`, http.StatusBadRequest)
+			return
+		}
+
+		var progressSeconds, durationSeconds float64
+		var completed bool
+		err = pool.QueryRow(r.Context(), `
+			SELECT progress_seconds, duration_seconds, completed
+			FROM watch_progress
+			WHERE user_id = $1 AND episode_id = $2
+		`, userID, episodeID).Scan(&progressSeconds, &durationSeconds, &completed)
+
+		if err != nil {
+			progressSeconds = 0
+			durationSeconds = 0
+			completed = false
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"progress_seconds": progressSeconds,
+			"duration_seconds": durationSeconds,
+			"completed":       completed,
+		})
+	})
+
+	// GET /series/{id}/progress — получить прогресс по всем эпизодам сериала
+	r.Get("/series/{id}/progress", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		seriesID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID сериала"}`, http.StatusBadRequest)
+			return
+		}
+
+		rows, err := pool.Query(r.Context(), `
+			SELECT wp.episode_id, wp.progress_seconds, wp.duration_seconds, wp.completed, wp.updated_at
+			FROM watch_progress wp
+			JOIN episodes e ON e.id = wp.episode_id
+			WHERE wp.user_id = $1 AND e.series_id = $2
+			ORDER BY e.episode_num
+		`, userID, seriesID)
+		if err != nil {
+			log.Printf("get watch progress: %v", err)
+			http.Error(w, `{"error":"Не удалось загрузить прогресс"}`, http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		result := []map[string]interface{}{}
+		for rows.Next() {
+			var episodeID int64
+			var progressSeconds, durationSeconds float64
+			var completed bool
+			var updatedAt interface{}
+			if err := rows.Scan(&episodeID, &progressSeconds, &durationSeconds, &completed, &updatedAt); err != nil {
+				log.Printf("scan watch progress: %v", err)
+				continue
+			}
+			result = append(result, map[string]interface{}{
+				"episode_id":       episodeID,
+				"progress_seconds": progressSeconds,
+				"duration_seconds": durationSeconds,
+				"completed":        completed,
+				"updated_at":       updatedAt,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))
 }
