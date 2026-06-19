@@ -495,6 +495,32 @@ func main() {
 		json.NewEncoder(w).Encode(result)
 	})
 
+	// DELETE /episodes/{id} — удаление эпизода
+	r.Delete("/episodes/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+		_ = userID
+
+		idStr := chi.URLParam(r, "id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID"}`, http.StatusBadRequest)
+			return
+		}
+
+		if _, err := storeInstance.DeleteEpisode(r.Context(), id); err != nil {
+			log.Printf("DeleteEpisode: %v", err)
+			http.Error(w, `{"error":"Не удалось удалить эпизод"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
 	// Запуск сервера
 	log.Println("Сервер запущен на http://localhost:8080")
 	log.Fatal(http.ListenAndServe(":8080", handler))
