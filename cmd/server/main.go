@@ -312,14 +312,23 @@ func main() {
 			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
 			return
 		}
-		series, err := storeInstance.GetSeriesByUser(r.Context(), &userID)
+		rows, err := storeInstance.GetSeriesByUser(r.Context(), &userID)
 		if err != nil {
 			log.Printf("GetSeriesByUser: %v", err)
 			http.Error(w, `{"error":"Не удалось загрузить сериалы"}`, http.StatusInternalServerError)
 			return
 		}
+		result := make([]map[string]interface{}, 0, len(rows))
+		for _, s := range rows {
+			result = append(result, map[string]interface{}{
+				"id":          s.ID,
+				"title":       s.Title,
+				"description": s.Description,
+				"cover_url":   s.CoverUrl,
+			})
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(series)
+		json.NewEncoder(w).Encode(result)
 	})
 
 	// Запуск сервера
