@@ -359,7 +359,10 @@ func main() {
 			defer file.Close()
 			ext := filepath.Ext(header.Filename)
 			token := make([]byte, 16)
-			rand.Read(token)
+			if _, e := rand.Read(token); e != nil {
+				http.Error(w, `{"error":"Внутренняя ошибка"}`, http.StatusInternalServerError)
+				return
+			}
 			filename := hex.EncodeToString(token) + ext
 			dst, err := os.Create(filepath.Join(coverDir, filename))
 			if err == nil {
@@ -433,7 +436,10 @@ func main() {
 			defer file.Close()
 			ext := filepath.Ext(header.Filename)
 			token := make([]byte, 16)
-			rand.Read(token)
+			if _, e := rand.Read(token); e != nil {
+				http.Error(w, `{"error":"Внутренняя ошибка"}`, http.StatusInternalServerError)
+				return
+			}
 			filename := hex.EncodeToString(token) + ext
 			dst, err := os.Create(filepath.Join(coverDir, filename))
 			if err == nil {
@@ -442,6 +448,12 @@ func main() {
 					url := "/uploads/covers/" + filename
 					coverURL = &url
 				}
+			}
+		} else {
+			// No new cover uploaded — keep existing cover_url
+			existing, err := storeInstance.GetSeriesByID(r.Context(), id)
+			if err == nil {
+				coverURL = existing.CoverUrl
 			}
 		}
 
