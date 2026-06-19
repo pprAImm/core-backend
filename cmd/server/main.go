@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 
 	"github.com/pprAImm/core-backend/internal/api"
@@ -28,18 +31,29 @@ func main() {
 	// Проверяем, что переменная установилась
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
-		log.Println("⚠️ DATABASE_URL не найден в окружении")
-	} else {
-		// Выводим URL (скрывая пароль)
-		log.Printf("DATABASE_URL найден: %s...", dbURL[:50])
+		log.Fatal("DATABASE_URL не задан")
 	}
+	log.Printf("DATABASE_URL найден: %s...", dbURL[:50])
 
 	// Подключение к базе данных
-	pool, err := database.Init()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	config, err := pgxpool.ParseConfig(dbURL)
+	if err != nil {
+		log.Fatal("Ошибка парсинга конфига:", err)
+	}
+	config.MaxConns = 5
+
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		log.Fatal("Ошибка подключения к БД:", err)
 	}
 	defer pool.Close()
+
+	if err = pool.Ping(ctx); err != nil {
+		log.Fatal("БД недоступна:", err)
+	}
 	log.Println("Подключение к БД установлено")
 
 	// Создание слоя доступа к данным

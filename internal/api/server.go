@@ -321,6 +321,11 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 	episodes, err := s.Store.GetEpisodesBySeries(ctx, &series.ID)
 	if err != nil {
 		// В случае ошибки возвращаем только сериал без эпизодов
+		var catID *int
+		if series.CategoryID != nil {
+			v := int(*series.CategoryID)
+			catID = &v
+		}
 		result := GetSeriesById200JSONResponse{
 			Series: &struct {
 				AverageRating *float32 `json:"average_rating,omitempty"`
@@ -334,7 +339,7 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 				Title:         series.Title,
 				Description:   series.Description,
 				CoverUrl:      series.CoverUrl,
-				CategoryId:    nil,
+				CategoryId:    catID,
 				AverageRating: nil,
 			},
 		}
@@ -342,6 +347,11 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 	}
 
 	// Формируем ответ с сериалом (включаем category_id и average_rating)
+	var catID *int
+	if series.CategoryID != nil {
+		v := int(*series.CategoryID)
+		catID = &v
+	}
 	result := GetSeriesById200JSONResponse{
 		Series: &struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
@@ -355,7 +365,7 @@ func (s *Server) GetSeriesById(ctx context.Context, request GetSeriesByIdRequest
 			Title:         series.Title,
 			Description:   series.Description,
 			CoverUrl:      series.CoverUrl,
-			CategoryId:    nil,
+			CategoryId:    catID,
 			AverageRating: nil,
 		},
 	}
@@ -423,6 +433,11 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 	// Конвертируем результаты в формат ответа API
 	apiResults := make(SearchSeries200JSONResponse, len(results))
 	for i, r := range results {
+		var catID *int
+		if r.CategoryID != nil {
+			v := int(*r.CategoryID)
+			catID = &v
+		}
 		apiResults[i] = struct {
 			AverageRating *float32 `json:"average_rating,omitempty"`
 			CategoryId    *int     `json:"category_id,omitempty"`
@@ -435,7 +450,7 @@ func (s *Server) SearchSeries(ctx context.Context, request SearchSeriesRequestOb
 			Title:         r.Title,
 			Description:   r.Description,
 			CoverUrl:      r.CoverUrl,
-			CategoryId:    nil,
+			CategoryId:    catID,
 			AverageRating: nil,
 		}
 	}
