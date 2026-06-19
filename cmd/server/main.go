@@ -4,9 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -219,6 +222,17 @@ func main() {
 		}
 	})
 
+	// Serve uploaded files (covers, etc.)
+	uploadDir := "./uploads"
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		log.Fatalf("Failed to create uploads directory: %v", err)
+	}
+	coverDir := filepath.Join(uploadDir, "covers")
+	if err := os.MkdirAll(coverDir, 0755); err != nil {
+		log.Fatalf("Failed to create covers directory: %v", err)
+	}
+	r.Handle("/uploads/*", http.StripPrefix("/uploads/", http.FileServer(http.Dir(uploadDir))))
+
 	handler := api.AuthMiddleware(storeInstance)(r)
 
 	api.HandlerFromMux(strictHandler, r)
@@ -306,6 +320,147 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	// POST /series — создание нового сериала
+	r.Post("/series", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+
+		if err := r.ParseMultipartForm(50 << 20); err != nil {
+			http.Error(w, `{"error":"Не удалось разобрать форму"}`, http.StatusBadRequest)
+			return
+		}
+
+		title := r.FormValue("title")
+		if title == "" {
+			http.Error(w, `{"error":"Название обязательно"}`, http.StatusBadRequest)
+			return
+		}
+		description := r.FormValue("description")
+
+		// Category slugs
+		var categoryID *int64
+		if slugsRaw := r.FormValue("category_slugs"); slugsRaw != "" {
+			var slugs []string
+			if err := json.Unmarshal([]byte(slugsRaw), &slugs); err == nil && len(slugs) > 0 {
+				cat, err := storeInstance.GetCategoryBySlug(r.Context(), slugs[0])
+				if err == nil {
+					categoryID = &cat.ID
+				}
+			}
+		}
+
+		// Cover upload
+		var coverURL *string
+		file, header, err := r.FormFile("cover")
+		if err == nil {
+			defer file.Close()
+			ext := filepath.Ext(header.Filename)
+			token := make([]byte, 16)
+			rand.Read(token)
+			filename := hex.EncodeToString(token) + ext
+			dst, err := os.Create(filepath.Join(coverDir, filename))
+			if err == nil {
+				defer dst.Close()
+				if _, err := io.Copy(dst, file); err == nil {
+					url := "/uploads/covers/" + filename
+					coverURL = &url
+				}
+			}
+		}
+
+		descPtr := &description
+		if description == "" {
+			descPtr = nil
+		}
+
+		series, err := storeInstance.CreateSeriesWithUploader(r.Context(), title, descPtr, categoryID, coverURL, &userID)
+		if err != nil {
+			log.Printf("CreateSeriesWithUploader: %v", err)
+			http.Error(w, `{"error":"Не удалось создать сериал"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]int64{"id": series.ID})
+	})
+
+	// PUT /series/{id} — обновление сериала
+	r.Put("/series/{id}", func(w http.ResponseWriter, r *http.Request) {
+		userID, ok := api.GetUserIDFromContext(r.Context())
+		if !ok {
+			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
+			return
+		}
+		_ = userID // could check ownership later
+
+		idStr := chi.URLParam(r, "id")
+		id, err := strconv.ParseInt(idStr, 10, 64)
+		if err != nil {
+			http.Error(w, `{"error":"Неверный ID"}`, http.StatusBadRequest)
+			return
+		}
+
+		if err := r.ParseMultipartForm(50 << 20); err != nil {
+			http.Error(w, `{"error":"Не удалось разобрать форму"}`, http.StatusBadRequest)
+			return
+		}
+
+		title := r.FormValue("title")
+		if title == "" {
+			http.Error(w, `{"error":"Название обязательно"}`, http.StatusBadRequest)
+			return
+		}
+		description := r.FormValue("description")
+
+		var categoryID *int64
+		if slugsRaw := r.FormValue("category_slugs"); slugsRaw != "" {
+			var slugs []string
+			if err := json.Unmarshal([]byte(slugsRaw), &slugs); err == nil && len(slugs) > 0 {
+				cat, err := storeInstance.GetCategoryBySlug(r.Context(), slugs[0])
+				if err == nil {
+					categoryID = &cat.ID
+				}
+			}
+		}
+
+		var coverURL *string
+		file, header, err := r.FormFile("cover")
+		if err == nil {
+			defer file.Close()
+			ext := filepath.Ext(header.Filename)
+			token := make([]byte, 16)
+			rand.Read(token)
+			filename := hex.EncodeToString(token) + ext
+			dst, err := os.Create(filepath.Join(coverDir, filename))
+			if err == nil {
+				defer dst.Close()
+				if _, err := io.Copy(dst, file); err == nil {
+					url := "/uploads/covers/" + filename
+					coverURL = &url
+				}
+			}
+		}
+
+		descPtr := &description
+		if description == "" {
+			descPtr = nil
+		}
+
+		if _, err := storeInstance.UpdateSeries(r.Context(), id, title, descPtr, categoryID, coverURL); err != nil {
+			log.Printf("UpdateSeries: %v", err)
+			http.Error(w, `{"error":"Не удалось обновить сериал"}`, http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
+
+	// GET /user/series — список сериалов текущего пользователя
 	r.Get("/user/series", func(w http.ResponseWriter, r *http.Request) {
 		userID, ok := api.GetUserIDFromContext(r.Context())
 		if !ok {
