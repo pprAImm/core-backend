@@ -340,7 +340,6 @@ func main() {
 		}
 		description := r.FormValue("description")
 
-		// Category slugs
 		var categoryID *int64
 		if slugsRaw := r.FormValue("category_slugs"); slugsRaw != "" {
 			var slugs []string
@@ -352,7 +351,6 @@ func main() {
 			}
 		}
 
-		// Cover upload
 		var coverURL *string
 		file, header, err := r.FormFile("cover")
 		if err == nil {
@@ -398,7 +396,7 @@ func main() {
 			http.Error(w, `{"error":"Требуется авторизация"}`, http.StatusUnauthorized)
 			return
 		}
-		_ = userID // could check ownership later
+		_ = userID
 
 		idStr := chi.URLParam(r, "id")
 		id, err := strconv.ParseInt(idStr, 10, 64)
@@ -450,7 +448,6 @@ func main() {
 				}
 			}
 		} else {
-			// No new cover uploaded — keep existing cover_url
 			existing, err := storeInstance.GetSeriesByID(r.Context(), id)
 			if err == nil {
 				coverURL = existing.CoverUrl
