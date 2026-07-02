@@ -40,7 +40,7 @@ jobs:
 
       - name: Deploy on server
         run: |
-          ssh -o StrictHostKeyChecking=no root@185.23.34.25 << 'EOF'
+          ssh -o StrictHostKeyChecking=no root@139.100.235.63 << 'EOF'
             docker login ghcr.io -u ${{ github.actor }} -p ${{ secrets.GHCR_TOKEN }}
             docker pull ghcr.io/ppraimm/core-backend:latest
             docker stop core-backend || true
