@@ -48,6 +48,7 @@ jobs:
             docker run -d \
               --name core-backend \
               --restart always \
+              --network app-network \
               -p 8080:8080 \
               --env-file /root/.env \
               ghcr.io/ppraimm/core-backend:latest
